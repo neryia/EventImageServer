@@ -1,6 +1,6 @@
 {
   "Version": 1,
-  "Hash": "QFUr/bjK7fMtSmLkauA/Uj6kwYooIbL6S/IjFqrQvlU=",
+  "Hash": "coV/qw797mHwz6ohkZAfj0CddWZmDzjlXVk5OO3Ndcg=",
   "Source": "EventImageServer",
   "BasePath": "_content/EventImageServer",
   "Mode": "Default",
@@ -16,40 +16,6 @@
     }
   ],
   "Assets": [
-    {
-      "Identity": "C:\\Users\\IMOE001\\Desktop\\appToEvent\\server\\EventImageServer\\EventImageServer\\obj\\Debug\\net6.0\\scopedcss\\bundle\\EventImageServer.styles.css",
-      "SourceId": "EventImageServer",
-      "SourceType": "Computed",
-      "ContentRoot": "C:\\Users\\IMOE001\\Desktop\\appToEvent\\server\\EventImageServer\\EventImageServer\\obj\\Debug\\net6.0\\scopedcss\\bundle\\",
-      "BasePath": "_content/EventImageServer",
-      "RelativePath": "EventImageServer.styles.css",
-      "AssetKind": "All",
-      "AssetMode": "CurrentProject",
-      "AssetRole": "Primary",
-      "RelatedAsset": "",
-      "AssetTraitName": "ScopedCss",
-      "AssetTraitValue": "ApplicationBundle",
-      "CopyToOutputDirectory": "Never",
-      "CopyToPublishDirectory": "PreserveNewest",
-      "OriginalItemSpec": "C:\\Users\\IMOE001\\Desktop\\appToEvent\\server\\EventImageServer\\EventImageServer\\obj\\Debug\\net6.0\\scopedcss\\bundle\\EventImageServer.styles.css"
-    },
-    {
-      "Identity": "C:\\Users\\IMOE001\\Desktop\\appToEvent\\server\\EventImageServer\\EventImageServer\\obj\\Debug\\net6.0\\scopedcss\\projectbundle\\EventImageServer.bundle.scp.css",
-      "SourceId": "EventImageServer",
-      "SourceType": "Computed",
-      "ContentRoot": "C:\\Users\\IMOE001\\Desktop\\appToEvent\\server\\EventImageServer\\EventImageServer\\obj\\Debug\\net6.0\\scopedcss\\projectbundle\\",
-      "BasePath": "_content/EventImageServer",
-      "RelativePath": "EventImageServer.bundle.scp.css",
-      "AssetKind": "All",
-      "AssetMode": "Reference",
-      "AssetRole": "Primary",
-      "RelatedAsset": "",
-      "AssetTraitName": "ScopedCss",
-      "AssetTraitValue": "ProjectBundle",
-      "CopyToOutputDirectory": "Never",
-      "CopyToPublishDirectory": "PreserveNewest",
-      "OriginalItemSpec": "C:\\Users\\IMOE001\\Desktop\\appToEvent\\server\\EventImageServer\\EventImageServer\\obj\\Debug\\net6.0\\scopedcss\\projectbundle\\EventImageServer.bundle.scp.css"
-    },
     {
       "Identity": "C:\\Users\\IMOE001\\Desktop\\appToEvent\\server\\EventImageServer\\EventImageServer\\wwwroot\\css\\site.css",
       "SourceId": "EventImageServer",

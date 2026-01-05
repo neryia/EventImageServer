@@ -1,8 +1,18 @@
 {
   "version": 2,
-  "dgSpecHash": "ssz7YifW2HjKrjlkUb5xsCPdjT3BsrywsXTW/vtu7hs+1LPPPNjoC7TsmXyzucgMqosHyJNYxiie9bD/BdxlIQ==",
+  "dgSpecHash": "8b/SXtx2cCOSpgsPptNdRz95ZcEmC/L/1OOqSh8x4mtSChLPDi0E4xYiltfb9ad2xPsUNxuh9MK9AeZKnKan+g==",
   "success": true,
   "projectFilePath": "C:\\Users\\IMOE001\\Desktop\\appToEvent\\server\\EventImageServer\\EventImageServer\\EventImageServer.csproj",
-  "expectedPackageFiles": [],
+  "expectedPackageFiles": [
+    "C:\\Users\\IMOE001\\.nuget\\packages\\microsoft.aspnetcore.authentication.jwtbearer\\6.0.25\\microsoft.aspnetcore.authentication.jwtbearer.6.0.25.nupkg.sha512",
+    "C:\\Users\\IMOE001\\.nuget\\packages\\microsoft.csharp\\4.5.0\\microsoft.csharp.4.5.0.nupkg.sha512",
+    "C:\\Users\\IMOE001\\.nuget\\packages\\microsoft.identitymodel.jsonwebtokens\\6.10.0\\microsoft.identitymodel.jsonwebtokens.6.10.0.nupkg.sha512",
+    "C:\\Users\\IMOE001\\.nuget\\packages\\microsoft.identitymodel.logging\\6.10.0\\microsoft.identitymodel.logging.6.10.0.nupkg.sha512",
+    "C:\\Users\\IMOE001\\.nuget\\packages\\microsoft.identitymodel.protocols\\6.10.0\\microsoft.identitymodel.protocols.6.10.0.nupkg.sha512",
+    "C:\\Users\\IMOE001\\.nuget\\packages\\microsoft.identitymodel.protocols.openidconnect\\6.10.0\\microsoft.identitymodel.protocols.openidconnect.6.10.0.nupkg.sha512",
+    "C:\\Users\\IMOE001\\.nuget\\packages\\microsoft.identitymodel.tokens\\6.10.0\\microsoft.identitymodel.tokens.6.10.0.nupkg.sha512",
+    "C:\\Users\\IMOE001\\.nuget\\packages\\system.identitymodel.tokens.jwt\\6.10.0\\system.identitymodel.tokens.jwt.6.10.0.nupkg.sha512",
+    "C:\\Users\\IMOE001\\.nuget\\packages\\system.security.cryptography.cng\\4.5.0\\system.security.cryptography.cng.4.5.0.nupkg.sha512"
+  ],
   "logs": []
 }
