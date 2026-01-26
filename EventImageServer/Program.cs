@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.Extensions.FileProviders;
+using Microsoft.EntityFrameworkCore;
+using EventImageServer.Contexts;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -37,19 +39,22 @@ builder.Services
 
 builder.Services.AddAuthorization();
 
+// Add DbContext
+builder.Services.AddDbContext<AppDbContext>(options =>
+    options.UseMySql(
+        builder.Configuration.GetConnectionString("DefaultConnection"),
+        new MySqlServerVersion(new Version(8, 0, 33)) // Your MySQL version
+    )
+);
+
 var app = builder.Build();
 
-// Middleware
-app.UseCors();
-
-app.UseStaticFiles();
-
-app.UseRouting();            // REQUIRED
-
+app.UseRouting();          // first
+app.UseCors();             // then
 app.UseAuthentication();
 app.UseAuthorization();
-
 app.MapControllers();
+
 
 var uploadedImagesPath = Path.Combine(Directory.GetCurrentDirectory(), "UploadedImages");
 if (!Directory.Exists(uploadedImagesPath))
