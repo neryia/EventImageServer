@@ -39,15 +39,19 @@ builder.Services
 
 builder.Services.AddAuthorization();
 
-// Add DbContext
+// Add DbContext (local SQLite file — no external DB server required)
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseMySql(
-        builder.Configuration.GetConnectionString("DefaultConnection"),
-        new MySqlServerVersion(new Version(8, 0, 33)) // Your MySQL version
-    )
+    options.UseSqlite("Data Source=eventimage.db")
 );
 
 var app = builder.Build();
+
+// Create the local SQLite DB file and schema if they don't exist yet.
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    db.Database.EnsureCreated();
+}
 
 app.UseRouting();          // first
 app.UseCors();             // then

@@ -1,31 +1,25 @@
 {
   "format": 1,
   "restore": {
-    "C:\\Users\\IMOE001\\Desktop\\appToEvent\\server\\EventImageServer\\EventImageServer\\EventImageServer.csproj": {}
+    "/Users/neryiadayan/Desktop/proj/events/back/EventImageServer/EventImageServer/EventImageServer.csproj": {}
   },
   "projects": {
-    "C:\\Users\\IMOE001\\Desktop\\appToEvent\\server\\EventImageServer\\EventImageServer\\EventImageServer.csproj": {
+    "/Users/neryiadayan/Desktop/proj/events/back/EventImageServer/EventImageServer/EventImageServer.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Users\\IMOE001\\Desktop\\appToEvent\\server\\EventImageServer\\EventImageServer\\EventImageServer.csproj",
+        "projectUniqueName": "/Users/neryiadayan/Desktop/proj/events/back/EventImageServer/EventImageServer/EventImageServer.csproj",
         "projectName": "EventImageServer",
-        "projectPath": "C:\\Users\\IMOE001\\Desktop\\appToEvent\\server\\EventImageServer\\EventImageServer\\EventImageServer.csproj",
-        "packagesPath": "C:\\Users\\IMOE001\\.nuget\\packages\\",
-        "outputPath": "C:\\Users\\IMOE001\\Desktop\\appToEvent\\server\\EventImageServer\\EventImageServer\\obj\\",
+        "projectPath": "/Users/neryiadayan/Desktop/proj/events/back/EventImageServer/EventImageServer/EventImageServer.csproj",
+        "packagesPath": "/Users/neryiadayan/.nuget/packages/",
+        "outputPath": "/Users/neryiadayan/Desktop/proj/events/back/EventImageServer/EventImageServer/obj/",
         "projectStyle": "PackageReference",
-        "fallbackFolders": [
-          "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"
-        ],
         "configFilePaths": [
-          "C:\\Users\\IMOE001\\AppData\\Roaming\\NuGet\\NuGet.Config",
-          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.FallbackLocation.config",
-          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
+          "/Users/neryiadayan/.nuget/NuGet/NuGet.Config"
         ],
         "originalTargetFrameworks": [
           "net7.0"
         ],
         "sources": {
-          "C:\\Program Files (x86)\\Microsoft SDKs\\NuGetPackages\\": {},
           "https://api.nuget.org/v3/index.json": {}
         },
         "frameworks": {
@@ -38,13 +32,7 @@
           "warnAsError": [
             "NU1605"
           ]
-        },
-        "restoreAuditProperties": {
-          "enableAudit": "true",
-          "auditLevel": "low",
-          "auditMode": "direct"
-        },
-        "SdkAnalysisLevel": "9.0.300"
+        }
       },
       "frameworks": {
         "net7.0": {
@@ -56,17 +44,17 @@
             },
             "Microsoft.EntityFrameworkCore": {
               "target": "Package",
-              "version": "[7.0.2, )"
+              "version": "[7.0.20, )"
             },
             "Microsoft.EntityFrameworkCore.Design": {
               "include": "Runtime, Build, Native, ContentFiles, Analyzers, BuildTransitive",
               "suppressParent": "All",
               "target": "Package",
-              "version": "[7.0.2, )"
+              "version": "[7.0.20, )"
             },
-            "Pomelo.EntityFrameworkCore.MySql": {
+            "Microsoft.EntityFrameworkCore.Sqlite": {
               "target": "Package",
-              "version": "[7.0.0, )"
+              "version": "[7.0.20, )"
             }
           },
           "imports": [
@@ -88,7 +76,7 @@
               "privateAssets": "all"
             }
           },
-          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.310\\RuntimeIdentifierGraph.json"
+          "runtimeIdentifierGraphPath": "/usr/local/share/dotnet/x64/sdk/7.0.410/RuntimeIdentifierGraph.json"
         }
       }
     }

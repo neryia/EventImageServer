@@ -1,1 +1,6 @@
 */UploadedImages
+bin/
+obj/Debug/
+*.db
+*.db-shm
+*.db-wal

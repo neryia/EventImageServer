@@ -41,16 +41,14 @@ public class ImagesController : ControllerBase
     [HttpGet("Gallery")]
     public IActionResult GetImages()
     {
-        var a = Sitting.Calc();
-        a.Wait();
-        var userId = GetUID();
-        if (string.IsNullOrEmpty(userId))
-        {
-            return Unauthorized(new { message = "Invalid token, UID not found." });
-        }
-
         try
         {
+            var userId = GetUID();
+            if (string.IsNullOrEmpty(userId))
+            {
+                return Unauthorized(new { message = "Invalid token, UID not found." });
+            }
+
             var folderPath = Path.Combine(Directory.GetCurrentDirectory(), "UploadedImages", userId);
             if (!Directory.Exists(folderPath))
             {
@@ -67,7 +65,7 @@ public class ImagesController : ControllerBase
         }
         catch (Exception e)
         {
-            return Ok(new List<string>());
+            return StatusCode(500, new { message = "Error retrieving gallery", error = e.Message });
         }
     }
 
@@ -104,5 +102,59 @@ public class ImagesController : ControllerBase
             url = $"/UploadedImages/{userId}/{fileName}",
             type = GetMediaType(fileName)
         });
+    }
+
+    [HttpDelete("Delete")]
+    public IActionResult DeleteImage([FromQuery] string fileName)
+    {
+        return DeleteImageInternal(fileName);
+    }
+
+    [HttpDelete("Gallery/{fileName}")]
+    public IActionResult DeleteImageFromGallery(string fileName)
+    {
+        return DeleteImageInternal(fileName);
+    }
+
+    private IActionResult DeleteImageInternal(string fileName)
+    {
+        try
+        {
+            var userId = GetUID();
+            if (string.IsNullOrEmpty(userId))
+            {
+                return Unauthorized(new { message = "Invalid token, UID not found." });
+            }
+
+            if (string.IsNullOrEmpty(fileName))
+            {
+                return BadRequest(new { message = "File name is required." });
+            }
+
+            var folderPath = Path.Combine(Directory.GetCurrentDirectory(), "UploadedImages", userId);
+            var filePath = Path.Combine(folderPath, fileName);
+
+            // Security: ensure the file is within the user's folder
+            var fullFolderPath = Path.GetFullPath(folderPath);
+            var fullFilePath = Path.GetFullPath(filePath);
+
+            if (!fullFilePath.StartsWith(fullFolderPath))
+            {
+                return BadRequest(new { message = "Invalid file path." });
+            }
+
+            if (!System.IO.File.Exists(fullFilePath))
+            {
+                return NotFound(new { message = "File not found." });
+            }
+
+            System.IO.File.Delete(fullFilePath);
+
+            return Ok(new { message = "File deleted successfully." });
+        }
+        catch (Exception e)
+        {
+            return StatusCode(500, new { message = "Error deleting file", error = e.Message });
+        }
     }
 }
