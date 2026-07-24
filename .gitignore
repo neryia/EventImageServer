@@ -1,6 +1,6 @@
 */UploadedImages
 bin/
-obj/Debug/
+**/obj/Debug/
 *.db
 *.db-shm
 *.db-wal
