@@ -78,6 +78,7 @@ public class SeatingController : ControllerBase
     {
         public string? Name { get; set; }
         public string Category { get; set; } = string.Empty;
+        public string Tag { get; set; } = string.Empty;
         public int NumberOfGuests { get; set; } = 1;
         public int? TableId { get; set; }
     }
@@ -419,6 +420,7 @@ public class SeatingController : ControllerBase
         {
             Name = request.Name ?? string.Empty,
             Category = request.Category,
+            Tag = request.Tag,
             NumberOfGuests = request.NumberOfGuests,
             TableId = request.TableId,
             OwnerId = owner.Id
@@ -456,6 +458,7 @@ public class SeatingController : ControllerBase
 
         guest.Name = request.Name ?? string.Empty;
         guest.Category = request.Category;
+        guest.Tag = request.Tag;
         guest.NumberOfGuests = request.NumberOfGuests;
         guest.TableId = request.TableId;
 
