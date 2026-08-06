@@ -12,6 +12,10 @@ namespace EventImageServer.Contexts
         public DbSet<Vendor> Vendors { get; set; }
         public DbSet<VendorTimelineStep> VendorTimelineSteps { get; set; }
         public DbSet<VendorAttachment> VendorAttachments { get; set; }
+        public DbSet<Budget> Budgets { get; set; }
+        public DbSet<BudgetCategory> BudgetCategories { get; set; }
+        public DbSet<BudgetExpense> BudgetExpenses { get; set; }
+        public DbSet<GuestCategory> GuestCategories { get; set; }
 
         public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
 
@@ -58,6 +62,34 @@ namespace EventImageServer.Contexts
                 .WithOne(a => a.Vendor)
                 .HasForeignKey(a => a.VendorId)
                 .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<Budget>()
+                .HasMany(b => b.Categories)
+                .WithOne(c => c.Budget)
+                .HasForeignKey(c => c.BudgetId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<Budget>()
+                .HasMany(b => b.Expenses)
+                .WithOne(e => e.Budget)
+                .HasForeignKey(e => e.BudgetId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<BudgetCategory>()
+                .HasMany(c => c.Expenses)
+                .WithOne(e => e.Category)
+                .HasForeignKey(e => e.CategoryId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<Users>()
+                .HasMany<GuestCategory>()
+                .WithOne(gc => gc.Owner)
+                .HasForeignKey(gc => gc.OwnerId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<GuestCategory>()
+                .HasIndex(gc => new { gc.OwnerId, gc.Value })
+                .IsUnique();
         }
     }
 

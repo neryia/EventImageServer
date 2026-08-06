@@ -64,6 +64,29 @@ public class SeatingController : ControllerBase
         return user;
     }
 
+    // Ensures a GuestCategory row exists for the given owner/value (created with the
+    // default color if missing) so newly-used category strings show up in the
+    // category/color list returned by GET /Seating. No-op for blank values.
+    private void EnsureCategoryExists(string ownerId, string? categoryValue)
+    {
+        if (string.IsNullOrWhiteSpace(categoryValue))
+        {
+            return;
+        }
+
+        var exists = _dbContext.GuestCategories
+            .Any(c => c.OwnerId == ownerId && c.Value == categoryValue);
+
+        if (!exists)
+        {
+            _dbContext.GuestCategories.Add(new GuestCategory
+            {
+                OwnerId = ownerId,
+                Value = categoryValue
+            });
+        }
+    }
+
     public class TableRequest
     {
         public string? Name { get; set; }
@@ -94,6 +117,11 @@ public class SeatingController : ControllerBase
     {
         public int GuestId { get; set; }
         public int? TableId { get; set; }
+    }
+
+    public class CategoryColorRequest
+    {
+        public string Color { get; set; } = string.Empty;
     }
 
     public class SaveArrangementRequest
@@ -316,7 +344,11 @@ public class SeatingController : ControllerBase
                 .Where(g => g.OwnerId == owner.Id)
                 .ToList();
 
-            return Ok(new { tables, guests });
+            var categories = _dbContext.GuestCategories
+                .Where(c => c.OwnerId == owner.Id)
+                .ToList();
+
+            return Ok(new { tables, guests, categories });
         }
         catch (Exception e)
         {
@@ -427,6 +459,7 @@ public class SeatingController : ControllerBase
         };
 
         _dbContext.Guests.Add(guest);
+        EnsureCategoryExists(owner.Id!, request.Category);
         await _dbContext.SaveChangesAsync();
 
         return Ok(guest);
@@ -462,6 +495,7 @@ public class SeatingController : ControllerBase
         guest.NumberOfGuests = request.NumberOfGuests;
         guest.TableId = request.TableId;
 
+        EnsureCategoryExists(owner.Id!, request.Category);
         await _dbContext.SaveChangesAsync();
 
         return Ok(guest);
@@ -486,6 +520,51 @@ public class SeatingController : ControllerBase
         await _dbContext.SaveChangesAsync();
 
         return Ok(new { message = "Guest deleted." });
+    }
+
+    // Sets (or creates) the display color for a category value. This is a bulk
+    // operation: the color lives on the GuestCategory row, not on individual guests,
+    // so every guest sharing this category value picks up the new color immediately.
+    [HttpPut("Category/{categoryValue}/Color")]
+    public async Task<IActionResult> UpdateCategoryColor(string categoryValue, [FromBody] CategoryColorRequest request)
+    {
+        var owner = RequireEventOwner(out var error);
+        if (owner == null)
+        {
+            return error!;
+        }
+
+        if (string.IsNullOrWhiteSpace(categoryValue))
+        {
+            return BadRequest(new { message = "Category value is required." });
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Color))
+        {
+            return BadRequest(new { message = "Color is required." });
+        }
+
+        var category = _dbContext.GuestCategories
+            .FirstOrDefault(c => c.OwnerId == owner.Id && c.Value == categoryValue);
+
+        if (category == null)
+        {
+            category = new GuestCategory
+            {
+                OwnerId = owner.Id,
+                Value = categoryValue,
+                Color = request.Color
+            };
+            _dbContext.GuestCategories.Add(category);
+        }
+        else
+        {
+            category.Color = request.Color;
+        }
+
+        await _dbContext.SaveChangesAsync();
+
+        return Ok(category);
     }
 
     // Assigns (or reassigns) a guest to a table, checking capacity.
