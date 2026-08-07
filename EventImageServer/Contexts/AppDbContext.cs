@@ -9,6 +9,7 @@ namespace EventImageServer.Contexts
         public DbSet<UserMedia> UserMedia { get; set; }
         public DbSet<Table> Tables { get; set; }
         public DbSet<Guest> Guests { get; set; }
+        public DbSet<GuestMedia> GuestMedia { get; set; }
         public DbSet<Vendor> Vendors { get; set; }
         public DbSet<VendorTimelineStep> VendorTimelineSteps { get; set; }
         public DbSet<VendorAttachment> VendorAttachments { get; set; }
@@ -16,6 +17,7 @@ namespace EventImageServer.Contexts
         public DbSet<BudgetCategory> BudgetCategories { get; set; }
         public DbSet<BudgetExpense> BudgetExpenses { get; set; }
         public DbSet<GuestCategory> GuestCategories { get; set; }
+        public DbSet<MessageLog> MessageLogs { get; set; }
 
         public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
 
@@ -44,6 +46,12 @@ namespace EventImageServer.Contexts
                 .WithOne(g => g.Table)
                 .HasForeignKey(g => g.TableId)
                 .OnDelete(DeleteBehavior.SetNull);
+
+            modelBuilder.Entity<Guest>()
+                .HasMany<GuestMedia>()
+                .WithOne(m => m.Guest)
+                .HasForeignKey(m => m.GuestId)
+                .OnDelete(DeleteBehavior.Cascade);
 
             modelBuilder.Entity<Users>()
                 .HasMany<Vendor>()
@@ -90,6 +98,22 @@ namespace EventImageServer.Contexts
             modelBuilder.Entity<GuestCategory>()
                 .HasIndex(gc => new { gc.OwnerId, gc.Value })
                 .IsUnique();
+
+            modelBuilder.Entity<Guest>()
+                .HasIndex(g => g.RsvpToken)
+                .IsUnique();
+
+            modelBuilder.Entity<Users>()
+                .HasMany<MessageLog>()
+                .WithOne(m => m.Owner)
+                .HasForeignKey(m => m.OwnerId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<Guest>()
+                .HasMany<MessageLog>()
+                .WithOne(m => m.Guest)
+                .HasForeignKey(m => m.GuestId)
+                .OnDelete(DeleteBehavior.Cascade);
         }
     }
 

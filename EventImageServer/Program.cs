@@ -2,7 +2,10 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.RateLimiting;
+using System.Threading.RateLimiting;
 using EventImageServer.Contexts;
+using EventImageServer.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -11,14 +14,23 @@ builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
     {
-        policy.WithOrigins("http://localhost:3000") // React dev server
+        policy.WithOrigins(
+            "https://spoiled-dandy-diminish.ngrok-free.dev" // ngrok tunnel (only allowed origin)
+        )
               .AllowAnyHeader()
               .AllowAnyMethod();
     });
 });
 
 // Add controllers
-builder.Services.AddControllers();
+// Serialize enums as camelCase strings (e.g. RsvpStatus.Confirmed -> "confirmed")
+// since the React client works with lowercase status strings throughout.
+builder.Services.AddControllers()
+    .AddJsonOptions(options =>
+    {
+        options.JsonSerializerOptions.Converters.Add(
+            new System.Text.Json.Serialization.JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase));
+    });
 
 // Configure Firebase JWT Authentication
 builder.Services
@@ -44,6 +56,27 @@ builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlite("Data Source=eventimage.db")
 );
 
+// Twilio (SMS/WhatsApp) messaging configuration + service
+builder.Services.Configure<TwilioOptions>(builder.Configuration.GetSection("Twilio"));
+builder.Services.AddScoped(sp =>
+    new TwilioMessagingService(sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<TwilioOptions>>().Value));
+
+// Rate limit the public, unauthenticated RSVP endpoints to reduce abuse/token
+// guessing risk (fixed window per client IP).
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy("rsvp", context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 20,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0
+            }));
+});
+
 var app = builder.Build();
 
 // Create the local SQLite DB file and schema if they don't exist yet.
@@ -55,6 +88,7 @@ using (var scope = app.Services.CreateScope())
 
 app.UseRouting();          // first
 app.UseCors();             // then
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();

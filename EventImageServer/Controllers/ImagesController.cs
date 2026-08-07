@@ -54,12 +54,44 @@ public class ImagesController : ControllerBase
             {
                 return Ok(new List<string>());
             }
+
+            // Attribute each file to the guest who uploaded it (via RSVP),
+            // so the owner's gallery can be grouped by guest instead of one
+            // flat, unordered list. Files with no matching GuestMedia row are
+            // the owner's own uploads.
+            var guestMediaByFileName = _dbContext.GuestMedia
+                .Where(m => m.OwnerId == userId)
+                .ToDictionary(m => m.FileName, m => m);
+
+            var guestIds = guestMediaByFileName.Values.Select(m => m.GuestId).Distinct().ToList();
+            var guestNamesById = _dbContext.Guests
+                .Where(g => guestIds.Contains(g.GuestId))
+                .ToDictionary(g => g.GuestId, g => g.Name);
+
             var files = Directory.GetFiles(folderPath)
-                                 .Select(f => new
+                                 .Select(f =>
                                  {
-                                     url = $"/UploadedImages/{userId}/{Path.GetFileName(f)}",
-                                     type = GetMediaType(Path.GetFileName(f))
-                                 }).ToList();
+                                     var fileName = Path.GetFileName(f);
+                                     guestMediaByFileName.TryGetValue(fileName, out var guestMedia);
+                                     string? guestName = null;
+                                     if (guestMedia != null)
+                                     {
+                                         guestNamesById.TryGetValue(guestMedia.GuestId, out guestName);
+                                     }
+
+                                     return new
+                                     {
+                                         url = $"/UploadedImages/{userId}/{fileName}",
+                                         type = GetMediaType(fileName),
+                                         guestId = guestMedia?.GuestId,
+                                         guestName,
+                                         uploadedAt = guestMedia?.CreatedAt
+                                     };
+                                 })
+                                 .OrderBy(f => f.guestName == null ? 0 : 1)
+                                 .ThenBy(f => f.guestName)
+                                 .ThenBy(f => f.uploadedAt)
+                                 .ToList();
 
             return Ok(files);
         }
@@ -105,18 +137,18 @@ public class ImagesController : ControllerBase
     }
 
     [HttpDelete("Delete")]
-    public IActionResult DeleteImage([FromQuery] string fileName)
+    public async Task<IActionResult> DeleteImage([FromQuery] string fileName)
     {
-        return DeleteImageInternal(fileName);
+        return await DeleteImageInternal(fileName);
     }
 
     [HttpDelete("Gallery/{fileName}")]
-    public IActionResult DeleteImageFromGallery(string fileName)
+    public async Task<IActionResult> DeleteImageFromGallery(string fileName)
     {
-        return DeleteImageInternal(fileName);
+        return await DeleteImageInternal(fileName);
     }
 
-    private IActionResult DeleteImageInternal(string fileName)
+    private async Task<IActionResult> DeleteImageInternal(string fileName)
     {
         try
         {
@@ -149,6 +181,36 @@ public class ImagesController : ControllerBase
             }
 
             System.IO.File.Delete(fullFilePath);
+
+            // Keep guest-facing RSVP media list in sync: if this file was
+            // uploaded via a guest's RSVP link, remove its GuestMedia row(s)
+            // and free up the guest's upload quota too, so the guest no
+            // longer sees it after the owner deletes it from their gallery.
+            var trackedEntries = _dbContext.GuestMedia
+                .Where(m => m.OwnerId == userId && m.FileName == fileName)
+                .ToList();
+            if (trackedEntries.Count > 0)
+            {
+                var guestIds = trackedEntries.Select(m => m.GuestId).Distinct().ToList();
+                var guests = _dbContext.Guests.Where(g => guestIds.Contains(g.GuestId)).ToList();
+                foreach (var entry in trackedEntries)
+                {
+                    var guest = guests.FirstOrDefault(g => g.GuestId == entry.GuestId);
+                    if (guest != null)
+                    {
+                        if (entry.MediaType == "image")
+                        {
+                            guest.GuestPhotoUploadCount = Math.Max(0, guest.GuestPhotoUploadCount - 1);
+                        }
+                        else
+                        {
+                            guest.GuestVideoUploadCount = Math.Max(0, guest.GuestVideoUploadCount - 1);
+                        }
+                    }
+                }
+                _dbContext.GuestMedia.RemoveRange(trackedEntries);
+                await _dbContext.SaveChangesAsync();
+            }
 
             return Ok(new { message = "File deleted successfully." });
         }

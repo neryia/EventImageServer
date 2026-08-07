@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using EventImageServer.Contexts;
 using EventImageServer.Models;
 using EventImageServer.Services;
@@ -11,10 +12,22 @@ using Microsoft.EntityFrameworkCore;
 public class SeatingController : ControllerBase
 {
     private readonly AppDbContext _dbContext;
+    private readonly TwilioMessagingService _twilio;
 
-    public SeatingController(AppDbContext dbContext)
+    public SeatingController(AppDbContext dbContext, TwilioMessagingService twilio)
     {
         _dbContext = dbContext;
+        _twilio = twilio;
+    }
+
+    // Generates a URL-safe, cryptographically random RSVP token.
+    private static string GenerateSecureToken()
+    {
+        var bytes = RandomNumberGenerator.GetBytes(32);
+        return Convert.ToBase64String(bytes)
+            .Replace('+', '-')
+            .Replace('/', '_')
+            .TrimEnd('=');
     }
 
     private string GetUID()
@@ -104,6 +117,25 @@ public class SeatingController : ControllerBase
         public string Tag { get; set; } = string.Empty;
         public int NumberOfGuests { get; set; } = 1;
         public int? TableId { get; set; }
+        public string? Phone { get; set; }
+    }
+
+    public class RsvpDeadlineRequest
+    {
+        public DateTime? Deadline { get; set; }
+    }
+
+    public class EventDateRequest
+    {
+        public DateTime? EventDate { get; set; }
+    }
+
+    public class SendMessagesRequest
+    {
+        // Optional: limit the send to specific guests. If omitted, all eligible
+        // guests (pending, not opted-out, has a phone number) are targeted.
+        public List<int>? GuestIds { get; set; }
+        public MessageChannel Channel { get; set; } = MessageChannel.Sms;
     }
 
     public class AutoAssignRequest
@@ -245,6 +277,17 @@ public class SeatingController : ControllerBase
 
             var lockedIds = new HashSet<int>(request?.LockedGuestIds ?? new List<int>());
 
+            // Declined and opted-out guests are never seated: unassign them and
+            // exclude them from the arrangement sent to the seating service.
+            // Confirmed and Pending guests are still eligible to be seated.
+            var excludedGuests = guests.Where(g => g.RsvpStatus == RsvpStatus.Declined || g.OptedOut).ToList();
+            foreach (var guest in excludedGuests)
+            {
+                guest.TableId = null;
+            }
+
+            var seatableGuests = guests.Except(excludedGuests).ToList();
+
             var serviceRequest = new SeatingArrangeRequest
             {
                 Tables = tables.Select(t => new SeatingTableDto
@@ -253,7 +296,7 @@ public class SeatingController : ControllerBase
                     Name = t.Name,
                     Seats = t.Capacity
                 }).ToList(),
-                Guests = guests.Select(g => new SeatingGuestDto
+                Guests = seatableGuests.Select(g => new SeatingGuestDto
                 {
                     Id = g.GuestId.ToString(),
                     Name = g.Name,
@@ -269,12 +312,12 @@ public class SeatingController : ControllerBase
 
             var result = await Sitting.Arrange(serviceRequest);
 
-            var guestMap = guests.ToDictionary(g => g.GuestId);
+            var guestMap = seatableGuests.ToDictionary(g => g.GuestId);
 
             // Clear non-locked assignments, then apply the arrangement returned
             // by the service. Guests the service reports as unseated are left
             // unassigned (TableId = null).
-            foreach (var guest in guests)
+            foreach (var guest in seatableGuests)
             {
                 if (!lockedIds.Contains(guest.GuestId))
                 {
@@ -348,12 +391,56 @@ public class SeatingController : ControllerBase
                 .Where(c => c.OwnerId == owner.Id)
                 .ToList();
 
-            return Ok(new { tables, guests, categories });
+            var rsvpSummary = new
+            {
+                confirmed = guests.Count(g => g.RsvpStatus == RsvpStatus.Confirmed),
+                declined = guests.Count(g => g.RsvpStatus == RsvpStatus.Declined),
+                pending = guests.Count(g => g.RsvpStatus == RsvpStatus.Pending),
+                maybe = guests.Count(g => g.RsvpStatus == RsvpStatus.Maybe),
+                totalPeople = guests.Sum(g => g.NumberOfGuests),
+                confirmedPeople = guests.Where(g => g.RsvpStatus == RsvpStatus.Confirmed).Sum(g => g.ConfirmedCount ?? g.NumberOfGuests)
+            };
+
+            return Ok(new { tables, guests, categories, rsvpSummary, rsvpDeadline = owner.RsvpDeadline, eventDate = owner.EventDate });
         }
         catch (Exception e)
         {
             return StatusCode(500, new { message = "Error retrieving seating", error = e.Message });
         }
+    }
+
+    // Sets (or clears) the RSVP deadline for the current owner's event.
+    [HttpPut("RsvpDeadline")]
+    public async Task<IActionResult> SetRsvpDeadline([FromBody] RsvpDeadlineRequest request)
+    {
+        var owner = RequireEventOwner(out var error);
+        if (owner == null)
+        {
+            return error!;
+        }
+
+        owner.RsvpDeadline = request.Deadline;
+        await _dbContext.SaveChangesAsync();
+
+        return Ok(new { rsvpDeadline = owner.RsvpDeadline });
+    }
+
+    // Sets (or clears) the wedding day itself for the current owner's event.
+    // This gates the guest photo/video upload feature on the RSVP page (only
+    // open on the event date + a one-day grace period).
+    [HttpPut("EventDate")]
+    public async Task<IActionResult> SetEventDate([FromBody] EventDateRequest request)
+    {
+        var owner = RequireEventOwner(out var error);
+        if (owner == null)
+        {
+            return error!;
+        }
+
+        owner.EventDate = request.EventDate;
+        await _dbContext.SaveChangesAsync();
+
+        return Ok(new { eventDate = owner.EventDate });
     }
 
     [HttpPost("Tables")]
@@ -433,72 +520,87 @@ public class SeatingController : ControllerBase
     [HttpPost("Guests")]
     public async Task<IActionResult> CreateGuest([FromBody] GuestRequest request)
     {
-        var owner = RequireEventOwner(out var error);
-        if (owner == null)
+        try
         {
-            return error!;
-        }
-
-        if (request.TableId.HasValue)
-        {
-            var assignError = ValidateTableAssignment(owner.Id!, request.TableId.Value, request.NumberOfGuests);
-            if (assignError != null)
+            var owner = RequireEventOwner(out var error);
+            if (owner == null)
             {
-                return assignError;
+                return error!;
             }
+
+            if (request.TableId.HasValue)
+            {
+                var assignError = ValidateTableAssignment(owner.Id!, request.TableId.Value, request.NumberOfGuests);
+                if (assignError != null)
+                {
+                    return assignError;
+                }
+            }
+
+            var guest = new Guest
+            {
+                Name = request.Name ?? string.Empty,
+                Category = request.Category,
+                Tag = request.Tag,
+                NumberOfGuests = request.NumberOfGuests,
+                TableId = request.TableId,
+                Phone = request.Phone,
+                OwnerId = owner.Id
+            };
+
+            _dbContext.Guests.Add(guest);
+            EnsureCategoryExists(owner.Id!, request.Category);
+            await _dbContext.SaveChangesAsync();
+
+            return Ok(guest);
         }
-
-        var guest = new Guest
+        catch (Exception e)
         {
-            Name = request.Name ?? string.Empty,
-            Category = request.Category,
-            Tag = request.Tag,
-            NumberOfGuests = request.NumberOfGuests,
-            TableId = request.TableId,
-            OwnerId = owner.Id
-        };
-
-        _dbContext.Guests.Add(guest);
-        EnsureCategoryExists(owner.Id!, request.Category);
-        await _dbContext.SaveChangesAsync();
-
-        return Ok(guest);
+            return StatusCode(500, new { message = "Failed to create guest", error = e.Message });
+        }
     }
 
     [HttpPut("Guests/{id}")]
     public async Task<IActionResult> UpdateGuest(int id, [FromBody] GuestRequest request)
     {
-        var owner = RequireEventOwner(out var error);
-        if (owner == null)
+        try
         {
-            return error!;
-        }
-
-        var guest = _dbContext.Guests.FirstOrDefault(g => g.GuestId == id && g.OwnerId == owner.Id);
-        if (guest == null)
-        {
-            return NotFound(new { message = "Guest not found." });
-        }
-
-        if (request.TableId.HasValue && request.TableId != guest.TableId)
-        {
-            var assignError = ValidateTableAssignment(owner.Id!, request.TableId.Value, request.NumberOfGuests);
-            if (assignError != null)
+            var owner = RequireEventOwner(out var error);
+            if (owner == null)
             {
-                return assignError;
+                return error!;
             }
+
+            var guest = _dbContext.Guests.FirstOrDefault(g => g.GuestId == id && g.OwnerId == owner.Id);
+            if (guest == null)
+            {
+                return NotFound(new { message = "Guest not found." });
+            }
+
+            guest.Name = request.Name ?? string.Empty;
+            guest.Category = request.Category;
+            guest.Tag = request.Tag;
+            guest.NumberOfGuests = request.NumberOfGuests;
+            guest.Phone = request.Phone;
+
+            // If the guest is being (re)seated but their party size no longer fits
+            // at that table — e.g. the owner just bumped up their headcount while
+            // they were already seated — automatically unseat them instead of
+            // blocking the party-size update or silently overbooking the table.
+            guest.TableId = request.TableId.HasValue &&
+                TableHasCapacity(owner.Id!, request.TableId.Value, request.NumberOfGuests, excludeGuestId: guest.GuestId)
+                ? request.TableId
+                : null;
+
+            EnsureCategoryExists(owner.Id!, request.Category);
+            await _dbContext.SaveChangesAsync();
+
+            return Ok(guest);
         }
-
-        guest.Name = request.Name ?? string.Empty;
-        guest.Category = request.Category;
-        guest.Tag = request.Tag;
-        guest.NumberOfGuests = request.NumberOfGuests;
-        guest.TableId = request.TableId;
-
-        EnsureCategoryExists(owner.Id!, request.Category);
-        await _dbContext.SaveChangesAsync();
-
-        return Ok(guest);
+        catch (Exception e)
+        {
+            return StatusCode(500, new { message = "Failed to update guest", error = e.Message });
+        }
     }
 
     [HttpDelete("Guests/{id}")]
@@ -520,6 +622,225 @@ public class SeatingController : ControllerBase
         await _dbContext.SaveChangesAsync();
 
         return Ok(new { message = "Guest deleted." });
+    }
+
+    // Generates a secure RSVP token for the guest on first call. Subsequent calls
+    // return the same existing token/link instead of regenerating a new one, so
+    // copying the link multiple times always yields the same URL. Use RegenerateLink
+    // if a fresh token (invalidating the old link) is explicitly needed.
+    [HttpPost("Guests/{id}/GenerateLink")]
+    public async Task<IActionResult> GenerateLink(int id)
+    {
+        try
+        {
+            var owner = RequireEventOwner(out var error);
+            if (owner == null)
+            {
+                return error!;
+            }
+
+            var guest = _dbContext.Guests.FirstOrDefault(g => g.GuestId == id && g.OwnerId == owner.Id);
+            if (guest == null)
+            {
+                return NotFound(new { message = "Guest not found." });
+            }
+
+            if (string.IsNullOrEmpty(guest.RsvpToken))
+            {
+                guest.RsvpToken = GenerateSecureToken();
+                guest.RsvpTokenCreatedAt = DateTime.UtcNow;
+                await _dbContext.SaveChangesAsync();
+            }
+
+            var baseUrl = string.IsNullOrWhiteSpace(_twilio.PublicBaseUrl)
+                ? $"{Request.Scheme}://{Request.Host}"
+                : _twilio.PublicBaseUrl.TrimEnd('/');
+
+            return Ok(new { link = $"{baseUrl}/Rsvp/{guest.RsvpToken}", token = guest.RsvpToken });
+        }
+        catch (Exception e)
+        {
+            return StatusCode(500, new { message = "Failed to generate RSVP link", error = e.Message });
+        }
+    }
+
+    public class RsvpStatusUpdateRequest
+    {
+        public RsvpStatus Status { get; set; }
+        public int NumberOfGuests { get; set; }
+    }
+
+    // Lets the owner manually set a guest's RSVP status (e.g. they heard back by
+    // phone instead of through the Smart RSVP link). NumberOfGuests is required
+    // on every call so the party size always stays in sync with the new status
+    // — this matters most when manually declining, where a stale non-zero party
+    // size would keep counting the guest toward capacity/head-count even though
+    // they aren't coming.
+    [HttpPut("Guests/{id}/RsvpStatus")]
+    public async Task<IActionResult> UpdateRsvpStatus(int id, [FromBody] RsvpStatusUpdateRequest request)
+    {
+        try
+        {
+            var owner = RequireEventOwner(out var error);
+            if (owner == null)
+            {
+                return error!;
+            }
+
+            var guest = _dbContext.Guests.FirstOrDefault(g => g.GuestId == id && g.OwnerId == owner.Id);
+            if (guest == null)
+            {
+                return NotFound(new { message = "Guest not found." });
+            }
+
+            if (!Enum.IsDefined(typeof(RsvpStatus), request.Status))
+            {
+                return BadRequest(new { message = "Invalid RSVP status." });
+            }
+
+            if (request.NumberOfGuests < 0)
+            {
+                return BadRequest(new { message = "Party size cannot be negative." });
+            }
+
+            guest.RsvpStatus = request.Status;
+            guest.RsvpRespondedAt = DateTime.UtcNow;
+
+            if (request.Status == RsvpStatus.Declined)
+            {
+                // A declined guest isn't coming, so they shouldn't occupy a seat.
+                guest.TableId = null;
+                guest.NumberOfGuests = request.NumberOfGuests;
+                guest.ConfirmedCount = request.NumberOfGuests;
+            }
+            else
+            {
+                // If the guest is currently seated but their new party size no
+                // longer fits at that table, automatically unseat them instead of
+                // blocking the status/party-size update.
+                if (guest.TableId.HasValue &&
+                    !TableHasCapacity(owner.Id!, guest.TableId.Value, request.NumberOfGuests, excludeGuestId: guest.GuestId))
+                {
+                    guest.TableId = null;
+                }
+
+                guest.NumberOfGuests = request.NumberOfGuests;
+                guest.ConfirmedCount = request.Status == RsvpStatus.Confirmed
+                    ? request.NumberOfGuests
+                    : guest.ConfirmedCount;
+            }
+
+            await _dbContext.SaveChangesAsync();
+
+            return Ok(guest);
+        }
+        catch (Exception e)
+        {
+            return StatusCode(500, new { message = "Failed to update RSVP status", error = e.Message });
+        }
+    }
+
+    // Sends an RSVP invite (SMS/WhatsApp) to eligible guests: not opted-out, has a
+    // phone number. Generates a token first if the guest doesn't already have one.
+    [HttpPost("Invites/Send")]
+    public async Task<IActionResult> SendInvites([FromBody] SendMessagesRequest request)
+    {
+        return await SendGuestMessages(request, MessageType.Invite);
+    }
+
+    // Sends an RSVP reminder to guests who are still Pending, not opted-out, have a
+    // phone number, and (if a deadline is set) the deadline hasn't passed yet.
+    [HttpPost("Reminders/Send")]
+    public async Task<IActionResult> SendReminders([FromBody] SendMessagesRequest request)
+    {
+        return await SendGuestMessages(request, MessageType.Reminder);
+    }
+
+    private async Task<IActionResult> SendGuestMessages(SendMessagesRequest request, MessageType type)
+    {
+        var owner = RequireEventOwner(out var error);
+        if (owner == null)
+        {
+            return error!;
+        }
+
+        try
+        {
+            var guestsQuery = _dbContext.Guests.Where(g => g.OwnerId == owner.Id);
+            if (request.GuestIds != null && request.GuestIds.Count > 0)
+            {
+                var ids = request.GuestIds.ToHashSet();
+                guestsQuery = guestsQuery.Where(g => ids.Contains(g.GuestId));
+            }
+
+            var guests = guestsQuery.ToList()
+                .Where(g => !g.OptedOut && !string.IsNullOrWhiteSpace(g.Phone))
+                .ToList();
+
+            // Reminders only make sense for guests who haven't responded yet, and
+            // must not be sent once the RSVP deadline has passed.
+            if (type == MessageType.Reminder)
+            {
+                guests = guests.Where(g => g.RsvpStatus == RsvpStatus.Pending).ToList();
+                if (owner.RsvpDeadline.HasValue && DateTime.UtcNow > owner.RsvpDeadline.Value)
+                {
+                    return BadRequest(new { message = "RSVP deadline has already passed." });
+                }
+            }
+
+            var baseUrl = string.IsNullOrWhiteSpace(_twilio.PublicBaseUrl)
+                ? $"{Request.Scheme}://{Request.Host}"
+                : _twilio.PublicBaseUrl.TrimEnd('/');
+
+            var results = new List<object>();
+
+            foreach (var guest in guests)
+            {
+                if (string.IsNullOrEmpty(guest.RsvpToken))
+                {
+                    guest.RsvpToken = GenerateSecureToken();
+                    guest.RsvpTokenCreatedAt = DateTime.UtcNow;
+                }
+
+                var link = $"{baseUrl}/Rsvp/{guest.RsvpToken}";
+                var body = type == MessageType.Invite
+                    ? $"You're invited! Please RSVP here: {link}"
+                    : $"Reminder: please RSVP here: {link}";
+
+                var log = new MessageLog
+                {
+                    OwnerId = owner.Id,
+                    GuestId = guest.GuestId,
+                    Channel = request.Channel,
+                    Type = type,
+                    To = guest.Phone!,
+                    SentAt = DateTime.UtcNow
+                };
+
+                try
+                {
+                    var sendResult = await _twilio.SendAsync(request.Channel, guest.Phone!, body);
+                    log.TwilioSid = sendResult.Sid;
+                    log.Status = sendResult.Status;
+                }
+                catch (Exception ex)
+                {
+                    log.Status = "failed";
+                    log.ErrorCode = ex.Message;
+                }
+
+                _dbContext.MessageLogs.Add(log);
+                results.Add(new { guestId = guest.GuestId, status = log.Status });
+            }
+
+            await _dbContext.SaveChangesAsync();
+
+            return Ok(new { sent = results.Count, results });
+        }
+        catch (Exception e)
+        {
+            return StatusCode(500, new { message = "Error sending messages", error = e.Message });
+        }
     }
 
     // Sets (or creates) the display color for a category value. This is a bulk
@@ -614,5 +935,24 @@ public class SeatingController : ControllerBase
         }
 
         return null;
+    }
+
+    // Non-error variant of the same capacity check, used where an owner is
+    // updating a guest's party size/status rather than explicitly assigning a
+    // seat — callers use this to silently unseat the guest instead of blocking
+    // the update when the new party size no longer fits.
+    private bool TableHasCapacity(string ownerId, int tableId, int partySize, int? excludeGuestId = null)
+    {
+        var table = _dbContext.Tables.FirstOrDefault(t => t.TableId == tableId && t.OwnerId == ownerId);
+        if (table == null)
+        {
+            return false;
+        }
+
+        var currentSeated = _dbContext.Guests
+            .Where(g => g.TableId == tableId && g.GuestId != excludeGuestId)
+            .Sum(g => (int?)g.NumberOfGuests) ?? 0;
+
+        return currentSeated + partySize <= table.Capacity;
     }
 }

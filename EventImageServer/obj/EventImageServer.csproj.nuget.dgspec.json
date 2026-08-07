@@ -55,6 +55,14 @@
             "Microsoft.EntityFrameworkCore.Sqlite": {
               "target": "Package",
               "version": "[7.0.20, )"
+            },
+            "Microsoft.IdentityModel.Protocols.OpenIdConnect": {
+              "target": "Package",
+              "version": "[8.3.1, )"
+            },
+            "Twilio": {
+              "target": "Package",
+              "version": "[7.14.9, )"
             }
           },
           "imports": [
