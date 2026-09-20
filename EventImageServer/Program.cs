@@ -63,6 +63,19 @@ builder.Services.Configure<TwilioOptions>(builder.Configuration.GetSection("Twil
 builder.Services.AddScoped(sp =>
     new TwilioMessagingService(sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<TwilioOptions>>().Value));
 
+// SMTP email configuration + service (used for collaborator invite emails).
+builder.Services.Configure<SmtpOptions>(builder.Configuration.GetSection("Smtp"));
+builder.Services.AddScoped(sp =>
+    new EmailService(
+        sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<SmtpOptions>>().Value,
+        sp.GetRequiredService<ILogger<EmailService>>()));
+
+// Shared "resolve the caller as an EventOwner" logic used by Seating/Budget/Vendors.
+builder.Services.AddScoped<EventOwnerResolver>();
+
+// Hourly background service sending automatic RSVP reminders (Phase 5.A).
+builder.Services.AddHostedService<ReminderScheduler>();
+
 // Rate limit the public, unauthenticated RSVP endpoints to reduce abuse/token
 // guessing risk (fixed window per client IP).
 builder.Services.AddRateLimiter(options =>

@@ -9,21 +9,33 @@ using Microsoft.AspNetCore.Mvc;
 public class ImagesController : ControllerBase
 {
     private readonly AppDbContext _dbContext;
+    private readonly EventOwnerResolver _ownerResolver;
 
-    public ImagesController(AppDbContext dbContext)
+    public ImagesController(AppDbContext dbContext, EventOwnerResolver ownerResolver)
     {
         _dbContext = dbContext;
+        _ownerResolver = ownerResolver;
     }
 
-    private string GetUID()
+    // Resolves the caller to the event owner's id (auto-provisioning /
+    // following an accepted collaborator invite exactly like Seating,
+    // Budget, Vendors, etc.), so collaborators see and manage the same
+    // gallery/folder as the owner instead of their own empty one.
+    private string? RequireOwnerId(out IActionResult? error)
     {
-       var user = User.FindFirst("user_id");
-       if(user == null)
+        var resolution = _ownerResolver.Resolve(User, "Only the event owner or an invited collaborator can manage images.");
+        if (resolution.Owner == null)
         {
-            return string.Empty;
+            error = StatusCode(resolution.ErrorStatusCode ?? 401, new { message = resolution.ErrorMessage });
+            return null;
         }
-        return user.Value;
-
+        if (resolution.IsReadOnlyViewer && !HttpMethods.IsGet(Request.Method) && !HttpMethods.IsHead(Request.Method))
+        {
+            error = StatusCode(403, new { message = "Viewers have read-only access." });
+            return null;
+        }
+        error = null;
+        return resolution.Owner.Id;
     }
 
     private string GetMediaType(string fileName)
@@ -43,10 +55,10 @@ public class ImagesController : ControllerBase
     {
         try
         {
-            var userId = GetUID();
-            if (string.IsNullOrEmpty(userId))
+            var userId = RequireOwnerId(out var error);
+            if (userId == null)
             {
-                return Unauthorized(new { message = "Invalid token, UID not found." });
+                return error!;
             }
 
             var folderPath = Path.Combine(Directory.GetCurrentDirectory(), "UploadedImages", userId);
@@ -104,10 +116,10 @@ public class ImagesController : ControllerBase
     [HttpPost("Upload")]
     public async Task<IActionResult> UploadImage(IFormFile file)
     {
-        var userId = GetUID();
-        if (string.IsNullOrEmpty(userId))
+        var userId = RequireOwnerId(out var error);
+        if (userId == null)
         {
-            return Unauthorized(new { message = "Invalid token, UID not found." });
+            return error!;
         }
 
         if (file == null || file.Length == 0)
@@ -152,10 +164,10 @@ public class ImagesController : ControllerBase
     {
         try
         {
-            var userId = GetUID();
-            if (string.IsNullOrEmpty(userId))
+            var userId = RequireOwnerId(out var error);
+            if (userId == null)
             {
-                return Unauthorized(new { message = "Invalid token, UID not found." });
+                return error!;
             }
 
             if (string.IsNullOrEmpty(fileName))

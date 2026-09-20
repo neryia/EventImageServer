@@ -13,11 +13,13 @@ public class SeatingController : ControllerBase
 {
     private readonly AppDbContext _dbContext;
     private readonly TwilioMessagingService _twilio;
+    private readonly EventOwnerResolver _ownerResolver;
 
-    public SeatingController(AppDbContext dbContext, TwilioMessagingService twilio)
+    public SeatingController(AppDbContext dbContext, TwilioMessagingService twilio, EventOwnerResolver ownerResolver)
     {
         _dbContext = dbContext;
         _twilio = twilio;
+        _ownerResolver = ownerResolver;
     }
 
     // Generates a URL-safe, cryptographically random RSVP token.
@@ -30,51 +32,27 @@ public class SeatingController : ControllerBase
             .TrimEnd('=');
     }
 
-    private string GetUID()
-    {
-        var user = User.FindFirst("user_id");
-        if (user == null)
-        {
-            return string.Empty;
-        }
-        return user.Value;
-    }
-
-    // Loads the current user and verifies they are an EventOwner.
+    // Loads the current user and verifies they are an EventOwner, delegating
+    // the auto-provisioning/role-check logic to the shared EventOwnerResolver
+    // (also used by BudgetController and VendorsController).
     // Returns null and sets errorResult when the check fails.
     private Users? RequireEventOwner(out IActionResult? errorResult)
     {
-        var userId = GetUID();
-        if (string.IsNullOrEmpty(userId))
+        var resolution = _ownerResolver.Resolve(User, "Only EventOwners have a seat order.");
+        if (resolution.Owner == null)
         {
-            errorResult = Unauthorized(new { message = "Invalid token, UID not found." });
+            errorResult = StatusCode(resolution.ErrorStatusCode!.Value, new { message = resolution.ErrorMessage });
             return null;
         }
 
-        var user = _dbContext.Clients.FirstOrDefault(u => u.Id == userId);
-        if (user == null)
+        if (resolution.IsReadOnlyViewer && !HttpMethods.IsGet(Request.Method) && !HttpMethods.IsHead(Request.Method))
         {
-            // No registration flow exists yet, so auto-provision the user on first
-            // authenticated request as an EventOwner (the only role that uses seating).
-            user = new Users
-            {
-                Id = userId,
-                Email = User.FindFirst("email")?.Value,
-                FullName = User.FindFirst("name")?.Value,
-                Role = RoleType.EventOwner
-            };
-            _dbContext.Clients.Add(user);
-            _dbContext.SaveChanges();
-        }
-
-        if (user.Role != RoleType.EventOwner)
-        {
-            errorResult = StatusCode(403, new { message = "Only EventOwners have a seat order." });
+            errorResult = StatusCode(403, new { message = "Viewers have read-only access." });
             return null;
         }
 
         errorResult = null;
-        return user;
+        return resolution.Owner;
     }
 
     // Ensures a GuestCategory row exists for the given owner/value (created with the
@@ -108,6 +86,9 @@ public class SeatingController : ControllerBase
         public int Capacity { get; set; }
         public int CapacityOnSides { get; set; }
         public int CapacityOnTopAndBottom { get; set; }
+        public double? PositionX { get; set; }
+        public double? PositionY { get; set; }
+        public double Rotation { get; set; }
     }
 
     public class GuestRequest
@@ -287,6 +268,13 @@ public class SeatingController : ControllerBase
             }
 
             var seatableGuests = guests.Except(excludedGuests).ToList();
+            var seatableIds = seatableGuests.Select(g => g.GuestId).ToHashSet();
+
+            var constraints = await _dbContext.SeatingConstraints
+                .Where(c => c.OwnerId == owner.Id
+                    && seatableIds.Contains(c.GuestAId)
+                    && seatableIds.Contains(c.GuestBId))
+                .ToListAsync();
 
             var serviceRequest = new SeatingArrangeRequest
             {
@@ -307,6 +295,12 @@ public class SeatingController : ControllerBase
                     TableId = lockedIds.Contains(g.GuestId) && g.TableId.HasValue
                         ? g.TableId.Value.ToString()
                         : null
+                }).ToList(),
+                Constraints = constraints.Select(c => new SeatingConstraintDto
+                {
+                    A = c.GuestAId.ToString(),
+                    B = c.GuestBId.ToString(),
+                    Kind = c.Kind == ConstraintKind.Together ? "together" : "apart"
                 }).ToList()
             };
 
@@ -391,6 +385,10 @@ public class SeatingController : ControllerBase
                 .Where(c => c.OwnerId == owner.Id)
                 .ToList();
 
+            var venueElements = _dbContext.VenueElements
+                .Where(e => e.OwnerId == owner.Id)
+                .ToList();
+
             var rsvpSummary = new
             {
                 confirmed = guests.Count(g => g.RsvpStatus == RsvpStatus.Confirmed),
@@ -401,7 +399,7 @@ public class SeatingController : ControllerBase
                 confirmedPeople = guests.Where(g => g.RsvpStatus == RsvpStatus.Confirmed).Sum(g => g.ConfirmedCount ?? g.NumberOfGuests)
             };
 
-            return Ok(new { tables, guests, categories, rsvpSummary, rsvpDeadline = owner.RsvpDeadline, eventDate = owner.EventDate });
+            return Ok(new { tables, guests, categories, venueElements, rsvpSummary, rsvpDeadline = owner.RsvpDeadline, eventDate = owner.EventDate, wallToken = owner.WallToken });
         }
         catch (Exception e)
         {
@@ -443,6 +441,83 @@ public class SeatingController : ControllerBase
         return Ok(new { eventDate = owner.EventDate });
     }
 
+    // Generates (or rotates) the secret token that gates the public live
+    // photo wall at /wall/{token}. Anyone with the token can view the wall
+    // while the upload window is open, so it's random and revocable.
+    [HttpPost("WallToken")]
+    public async Task<IActionResult> GenerateWallToken()
+    {
+        var owner = RequireEventOwner(out var error);
+        if (owner == null)
+        {
+            return error!;
+        }
+
+        owner.WallToken = GenerateSecureToken();
+        await _dbContext.SaveChangesAsync();
+
+        return Ok(new { wallToken = owner.WallToken });
+    }
+
+    // Revokes the wall token, immediately disabling public access to the wall.
+    [HttpDelete("WallToken")]
+    public async Task<IActionResult> RevokeWallToken()
+    {
+        var owner = RequireEventOwner(out var error);
+        if (owner == null)
+        {
+            return error!;
+        }
+
+        owner.WallToken = null;
+        await _dbContext.SaveChangesAsync();
+
+        return Ok(new { message = "Wall token revoked." });
+    }
+
+    public class ReminderSettingsRequest
+    {
+        public bool AutoRemindersEnabled { get; set; }
+        public List<int> ReminderOffsets { get; set; } = new();
+    }
+
+    // GET /Seating/ReminderSettings
+    [HttpGet("ReminderSettings")]
+    public IActionResult GetReminderSettings()
+    {
+        var owner = RequireEventOwner(out var error);
+        if (owner == null)
+        {
+            return error!;
+        }
+
+        return Ok(new { autoRemindersEnabled = owner.AutoRemindersEnabled, reminderOffsets = owner.ReminderOffsets });
+    }
+
+    // PUT /Seating/ReminderSettings { AutoRemindersEnabled, ReminderOffsets }
+    // ReminderOffsets are "days before RsvpDeadline" (e.g. [30,14,7,2]); the
+    // ReminderScheduler background service reads these hourly.
+    [HttpPut("ReminderSettings")]
+    public async Task<IActionResult> UpdateReminderSettings([FromBody] ReminderSettingsRequest request)
+    {
+        var owner = RequireEventOwner(out var error);
+        if (owner == null)
+        {
+            return error!;
+        }
+
+        owner.AutoRemindersEnabled = request.AutoRemindersEnabled;
+        owner.ReminderOffsets = (request.ReminderOffsets ?? new List<int>())
+            .Where(d => d > 0)
+            .Distinct()
+            .OrderByDescending(d => d)
+            .ToList();
+
+        await _dbContext.SaveChangesAsync();
+
+        return Ok(new { autoRemindersEnabled = owner.AutoRemindersEnabled, reminderOffsets = owner.ReminderOffsets });
+    }
+
     [HttpPost("Tables")]
     public async Task<IActionResult> CreateTable([FromBody] TableRequest request)
     {
@@ -460,6 +535,9 @@ public class SeatingController : ControllerBase
             Capacity = request.Capacity,
             CapacityOnSides = request.CapacityOnSides,
             CapacityOnTopAndBottom = request.CapacityOnTopAndBottom,
+            PositionX = request.PositionX,
+            PositionY = request.PositionY,
+            Rotation = request.Rotation,
             OwnerId = owner.Id
         };
 
@@ -490,10 +568,146 @@ public class SeatingController : ControllerBase
         table.Capacity = request.Capacity;
         table.CapacityOnSides = request.CapacityOnSides;
         table.CapacityOnTopAndBottom = request.CapacityOnTopAndBottom;
+        table.PositionX = request.PositionX;
+        table.PositionY = request.PositionY;
+        table.Rotation = request.Rotation;
 
         await _dbContext.SaveChangesAsync();
 
         return Ok(table);
+    }
+
+    public class TablePositionRequest
+    {
+        public double PositionX { get; set; }
+        public double PositionY { get; set; }
+        public double Rotation { get; set; }
+    }
+
+    // Lightweight endpoint for floor-plan drags: updates only position/rotation
+    // without requiring the full name/shape/capacity payload.
+    [HttpPatch("Tables/{id}/Position")]
+    public async Task<IActionResult> UpdateTablePosition(int id, [FromBody] TablePositionRequest request)
+    {
+        var owner = RequireEventOwner(out var error);
+        if (owner == null)
+        {
+            return error!;
+        }
+
+        var table = _dbContext.Tables.FirstOrDefault(t => t.TableId == id && t.OwnerId == owner.Id);
+        if (table == null)
+        {
+            return NotFound(new { message = "Table not found." });
+        }
+
+        table.PositionX = request.PositionX;
+        table.PositionY = request.PositionY;
+        table.Rotation = request.Rotation;
+
+        await _dbContext.SaveChangesAsync();
+
+        return Ok(table);
+    }
+
+    public class VenueElementRequest
+    {
+        public VenueElementKind Kind { get; set; }
+        public string? Label { get; set; }
+        public double X { get; set; }
+        public double Y { get; set; }
+        public double Width { get; set; } = 80;
+        public double Height { get; set; } = 80;
+        public double Rotation { get; set; }
+    }
+
+    [HttpGet("VenueElements")]
+    public IActionResult GetVenueElements()
+    {
+        var owner = RequireEventOwner(out var error);
+        if (owner == null)
+        {
+            return error!;
+        }
+
+        var elements = _dbContext.VenueElements.Where(e => e.OwnerId == owner.Id).ToList();
+        return Ok(elements);
+    }
+
+    [HttpPost("VenueElements")]
+    public async Task<IActionResult> CreateVenueElement([FromBody] VenueElementRequest request)
+    {
+        var owner = RequireEventOwner(out var error);
+        if (owner == null)
+        {
+            return error!;
+        }
+
+        var element = new VenueElement
+        {
+            OwnerId = owner.Id!,
+            Kind = request.Kind,
+            Label = request.Label,
+            X = request.X,
+            Y = request.Y,
+            Width = request.Width,
+            Height = request.Height,
+            Rotation = request.Rotation,
+        };
+
+        _dbContext.VenueElements.Add(element);
+        await _dbContext.SaveChangesAsync();
+
+        return Ok(element);
+    }
+
+    [HttpPut("VenueElements/{id}")]
+    public async Task<IActionResult> UpdateVenueElement(int id, [FromBody] VenueElementRequest request)
+    {
+        var owner = RequireEventOwner(out var error);
+        if (owner == null)
+        {
+            return error!;
+        }
+
+        var element = _dbContext.VenueElements.FirstOrDefault(e => e.ElementId == id && e.OwnerId == owner.Id);
+        if (element == null)
+        {
+            return NotFound(new { message = "Venue element not found." });
+        }
+
+        element.Kind = request.Kind;
+        element.Label = request.Label;
+        element.X = request.X;
+        element.Y = request.Y;
+        element.Width = request.Width;
+        element.Height = request.Height;
+        element.Rotation = request.Rotation;
+
+        await _dbContext.SaveChangesAsync();
+
+        return Ok(element);
+    }
+
+    [HttpDelete("VenueElements/{id}")]
+    public async Task<IActionResult> DeleteVenueElement(int id)
+    {
+        var owner = RequireEventOwner(out var error);
+        if (owner == null)
+        {
+            return error!;
+        }
+
+        var element = _dbContext.VenueElements.FirstOrDefault(e => e.ElementId == id && e.OwnerId == owner.Id);
+        if (element == null)
+        {
+            return NotFound(new { message = "Venue element not found." });
+        }
+
+        _dbContext.VenueElements.Remove(element);
+        await _dbContext.SaveChangesAsync();
+
+        return Ok(new { message = "Venue element deleted." });
     }
 
     [HttpDelete("Tables/{id}")]
@@ -618,10 +832,115 @@ public class SeatingController : ControllerBase
             return NotFound(new { message = "Guest not found." });
         }
 
+        // SeatingConstraints has no FK to Guests (it references two guest ids
+        // from the same table, which EF can't model as two navigation
+        // properties cleanly), so clean up any constraints referencing this
+        // guest by hand instead of relying on cascade delete.
+        var relatedConstraints = _dbContext.SeatingConstraints
+            .Where(c => c.OwnerId == owner.Id && (c.GuestAId == id || c.GuestBId == id));
+        _dbContext.SeatingConstraints.RemoveRange(relatedConstraints);
+
         _dbContext.Guests.Remove(guest);
         await _dbContext.SaveChangesAsync();
 
         return Ok(new { message = "Guest deleted." });
+    }
+
+    public class SeatingConstraintRequest
+    {
+        public int GuestAId { get; set; }
+        public int GuestBId { get; set; }
+        public ConstraintKind Kind { get; set; }
+    }
+
+    // GET /Seating/Constraints
+    [HttpGet("Constraints")]
+    public async Task<IActionResult> GetConstraints()
+    {
+        var owner = RequireEventOwner(out var error);
+        if (owner == null)
+        {
+            return error!;
+        }
+
+        var constraints = await _dbContext.SeatingConstraints
+            .Where(c => c.OwnerId == owner.Id)
+            .ToListAsync();
+
+        return Ok(constraints);
+    }
+
+    // POST /Seating/Constraints
+    [HttpPost("Constraints")]
+    public async Task<IActionResult> CreateConstraint([FromBody] SeatingConstraintRequest request)
+    {
+        var owner = RequireEventOwner(out var error);
+        if (owner == null)
+        {
+            return error!;
+        }
+
+        if (request.GuestAId == request.GuestBId)
+        {
+            return BadRequest(new { message = "A guest cannot be constrained with themselves." });
+        }
+
+        var guestIds = new[] { request.GuestAId, request.GuestBId };
+        var validGuestCount = await _dbContext.Guests
+            .CountAsync(g => g.OwnerId == owner.Id && guestIds.Contains(g.GuestId));
+        if (validGuestCount != 2)
+        {
+            return BadRequest(new { message = "Both guests must exist and belong to you." });
+        }
+
+        // Store the pair in a canonical (smaller id first) order so the
+        // unique index catches the same pair submitted in either order.
+        var (a, b) = request.GuestAId < request.GuestBId
+            ? (request.GuestAId, request.GuestBId)
+            : (request.GuestBId, request.GuestAId);
+
+        var exists = await _dbContext.SeatingConstraints.AnyAsync(c =>
+            c.OwnerId == owner.Id && c.GuestAId == a && c.GuestBId == b && c.Kind == request.Kind);
+        if (exists)
+        {
+            return BadRequest(new { message = "This constraint already exists." });
+        }
+
+        var constraint = new SeatingConstraint
+        {
+            OwnerId = owner.Id!,
+            GuestAId = a,
+            GuestBId = b,
+            Kind = request.Kind,
+        };
+
+        _dbContext.SeatingConstraints.Add(constraint);
+        await _dbContext.SaveChangesAsync();
+
+        return Ok(constraint);
+    }
+
+    // DELETE /Seating/Constraints/{id}
+    [HttpDelete("Constraints/{id}")]
+    public async Task<IActionResult> DeleteConstraint(int id)
+    {
+        var owner = RequireEventOwner(out var error);
+        if (owner == null)
+        {
+            return error!;
+        }
+
+        var constraint = await _dbContext.SeatingConstraints
+            .FirstOrDefaultAsync(c => c.ConstraintId == id && c.OwnerId == owner.Id);
+        if (constraint == null)
+        {
+            return NotFound(new { message = "Constraint not found." });
+        }
+
+        _dbContext.SeatingConstraints.Remove(constraint);
+        await _dbContext.SaveChangesAsync();
+
+        return Ok(new { message = "Constraint deleted." });
     }
 
     // Generates a secure RSVP token for the guest on first call. Subsequent calls
@@ -662,6 +981,64 @@ public class SeatingController : ControllerBase
         {
             return StatusCode(500, new { message = "Failed to generate RSVP link", error = e.Message });
         }
+    }
+
+    public class CheckInRequest
+    {
+        // Optional: defaults to the guest's confirmed (or invited) party size
+        // if omitted, so a simple "one tap = arrived" flow doesn't require the
+        // owner to also enter a headcount.
+        public int? CheckedInCount { get; set; }
+    }
+
+    // Marks a guest party as physically arrived at the event. Independent of
+    // RsvpStatus, which only tracks whether they responded, not whether they
+    // showed up.
+    [HttpPut("Guests/{id}/CheckIn")]
+    public async Task<IActionResult> CheckInGuest(int id, [FromBody] CheckInRequest request)
+    {
+        var owner = RequireEventOwner(out var error);
+        if (owner == null)
+        {
+            return error!;
+        }
+
+        var guest = _dbContext.Guests.FirstOrDefault(g => g.GuestId == id && g.OwnerId == owner.Id);
+        if (guest == null)
+        {
+            return NotFound(new { message = "Guest not found." });
+        }
+
+        guest.CheckedInAt = DateTime.UtcNow;
+        guest.CheckedInCount = request.CheckedInCount ?? guest.ConfirmedCount ?? guest.NumberOfGuests;
+
+        await _dbContext.SaveChangesAsync();
+
+        return Ok(guest);
+    }
+
+    // Undoes a check-in (accidental tap, guest left before the event, etc.).
+    [HttpDelete("Guests/{id}/CheckIn")]
+    public async Task<IActionResult> UndoCheckInGuest(int id)
+    {
+        var owner = RequireEventOwner(out var error);
+        if (owner == null)
+        {
+            return error!;
+        }
+
+        var guest = _dbContext.Guests.FirstOrDefault(g => g.GuestId == id && g.OwnerId == owner.Id);
+        if (guest == null)
+        {
+            return NotFound(new { message = "Guest not found." });
+        }
+
+        guest.CheckedInAt = null;
+        guest.CheckedInCount = null;
+
+        await _dbContext.SaveChangesAsync();
+
+        return Ok(guest);
     }
 
     public class RsvpStatusUpdateRequest

@@ -18,6 +18,9 @@ namespace EventImageServer.Models
         public int Capacity { get; set; }
         public int CapacityOnSides { get; set; }
         public int CapacityOnTopAndBottom { get; set; }
+        public double? PositionX { get; set; }
+        public double? PositionY { get; set; }
+        public double Rotation { get; set; }
         public ICollection<Guest>? Guests { get; set; }
         public string? OwnerId { get; set; } // Firebase UID of the EventOwner
         [JsonIgnore]

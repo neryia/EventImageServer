@@ -23,10 +23,18 @@
         public int Seats { get; set; }
     }
 
+    public class SeatingConstraintDto
+    {
+        public string A { get; set; } = string.Empty;
+        public string B { get; set; } = string.Empty;
+        public string Kind { get; set; } = string.Empty; // "together" | "apart"
+    }
+
     public class SeatingArrangeRequest
     {
         public List<SeatingGuestDto> Guests { get; set; } = new();
         public List<SeatingTableDto> Tables { get; set; } = new();
+        public List<SeatingConstraintDto> Constraints { get; set; } = new();
     }
 
     public class TableAssignmentDto
@@ -60,6 +68,8 @@
         public int GuestsSeated { get; set; }
         [JsonPropertyName("people_seated")]
         public int PeopleSeated { get; set; }
+        [JsonPropertyName("constraint_violations")]
+        public int ConstraintViolations { get; set; }
     }
 
     public class ArrangeResponseDto

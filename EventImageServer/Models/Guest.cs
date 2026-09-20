@@ -55,5 +55,11 @@ namespace EventImageServer.Models
         // (wedding-day media upload feature). Enforces a per-guest quota.
         public int GuestPhotoUploadCount { get; set; }
         public int GuestVideoUploadCount { get; set; }
+
+        // Event-day check-in: set once the owner (or their staff) marks the
+        // party as physically arrived. Independent of RsvpStatus, which only
+        // tracks whether the guest RESPONDED, not whether they actually showed.
+        public DateTime? CheckedInAt { get; set; }
+        public int? CheckedInCount { get; set; }
     }
 }

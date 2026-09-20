@@ -20,6 +20,10 @@ namespace EventImageServer.Contexts
         public DbSet<MessageLog> MessageLogs { get; set; }
         public DbSet<Album> Albums { get; set; }
         public DbSet<AlbumMedia> AlbumMedia { get; set; }
+        public DbSet<PlanningTask> PlanningTasks { get; set; }
+        public DbSet<SeatingConstraint> SeatingConstraints { get; set; }
+        public DbSet<VenueElement> VenueElements { get; set; }
+        public DbSet<EventCollaborator> EventCollaborators { get; set; }
 
         public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
 
@@ -128,6 +132,55 @@ namespace EventImageServer.Contexts
                 .WithOne(m => m.Album)
                 .HasForeignKey(m => m.AlbumId)
                 .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<Users>()
+                .HasMany<PlanningTask>()
+                .WithOne()
+                .HasForeignKey(t => t.OwnerId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<PlanningTask>()
+                .HasIndex(t => t.OwnerId);
+
+            modelBuilder.Entity<Users>()
+                .HasMany<SeatingConstraint>()
+                .WithOne()
+                .HasForeignKey(c => c.OwnerId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<SeatingConstraint>()
+                .HasIndex(c => c.OwnerId);
+
+            modelBuilder.Entity<SeatingConstraint>()
+                .HasIndex(c => new { c.OwnerId, c.GuestAId, c.GuestBId, c.Kind })
+                .IsUnique();
+
+            modelBuilder.Entity<Users>()
+                .HasMany<VenueElement>()
+                .WithOne()
+                .HasForeignKey(e => e.OwnerId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<VenueElement>()
+                .HasIndex(e => e.OwnerId);
+
+            modelBuilder.Entity<Users>()
+                .HasIndex(u => u.WallToken)
+                .IsUnique();
+
+            modelBuilder.Entity<Users>()
+                .HasMany<EventCollaborator>()
+                .WithOne()
+                .HasForeignKey(c => c.OwnerId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<EventCollaborator>()
+                .HasIndex(c => new { c.OwnerId, c.CollaboratorEmail })
+                .IsUnique();
+
+            modelBuilder.Entity<EventCollaborator>()
+                .HasIndex(c => c.InviteToken)
+                .IsUnique();
         }
     }
 

@@ -1,5 +1,6 @@
 using EventImageServer.Contexts;
 using EventImageServer.Models;
+using EventImageServer.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -10,53 +11,34 @@ using Microsoft.EntityFrameworkCore;
 public class BudgetController : ControllerBase
 {
     private readonly AppDbContext _dbContext;
+    private readonly EventOwnerResolver _ownerResolver;
 
-    public BudgetController(AppDbContext dbContext)
+    public BudgetController(AppDbContext dbContext, EventOwnerResolver ownerResolver)
     {
         _dbContext = dbContext;
+        _ownerResolver = ownerResolver;
     }
 
-    private string GetUID()
-    {
-        var user = User.FindFirst("user_id");
-        if (user == null)
-        {
-            return string.Empty;
-        }
-        return user.Value;
-    }
-
+    // Loads the current user and verifies they are an EventOwner, delegating
+    // the auto-provisioning/role-check logic to the shared EventOwnerResolver
+    // (also used by SeatingController and VendorsController).
     private Users? RequireEventOwner(out IActionResult? errorResult)
     {
-        var userId = GetUID();
-        if (string.IsNullOrEmpty(userId))
+        var resolution = _ownerResolver.Resolve(User, "Only EventOwners manage budgets.");
+        if (resolution.Owner == null)
         {
-            errorResult = Unauthorized(new { message = "Invalid token, UID not found." });
+            errorResult = StatusCode(resolution.ErrorStatusCode!.Value, new { message = resolution.ErrorMessage });
             return null;
         }
 
-        var user = _dbContext.Clients.FirstOrDefault(u => u.Id == userId);
-        if (user == null)
+        if (resolution.IsReadOnlyViewer && !HttpMethods.IsGet(Request.Method) && !HttpMethods.IsHead(Request.Method))
         {
-            user = new Users
-            {
-                Id = userId,
-                Email = User.FindFirst("email")?.Value,
-                FullName = User.FindFirst("name")?.Value,
-                Role = RoleType.EventOwner
-            };
-            _dbContext.Clients.Add(user);
-            _dbContext.SaveChanges();
-        }
-
-        if (user.Role != RoleType.EventOwner)
-        {
-            errorResult = StatusCode(403, new { message = "Only EventOwners manage budgets." });
+            errorResult = StatusCode(403, new { message = "Viewers have read-only access." });
             return null;
         }
 
         errorResult = null;
-        return user;
+        return resolution.Owner;
     }
 
     // Request DTOs
