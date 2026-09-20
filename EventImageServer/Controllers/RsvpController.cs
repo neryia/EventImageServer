@@ -3,6 +3,7 @@ using EventImageServer.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.EntityFrameworkCore;
 
 namespace EventImageServer.Controllers
 {
@@ -86,7 +87,9 @@ namespace EventImageServer.Controllers
                 return NotFound(new { message = "Invalid RSVP link." });
             }
 
-            var guest = _dbContext.Guests.FirstOrDefault(g => g.RsvpToken == token);
+            var guest = _dbContext.Guests
+                .Include(g => g.Table)
+                .FirstOrDefault(g => g.RsvpToken == token);
             if (guest == null)
             {
                 return NotFound(new { message = "Invalid RSVP link." });
@@ -116,6 +119,9 @@ namespace EventImageServer.Controllers
                 eventDate = owner?.EventDate,
                 uploadWindowOpen = IsUploadWindowOpen(owner),
                 rsvpLocked = IsRsvpLocked(owner),
+                // Table assignments are intentionally released only once the
+                // wedding day begins. An unassigned guest simply receives null.
+                tableName = IsRsvpLocked(owner) ? guest.Table?.Name : null,
                 photosUploaded = guest.GuestPhotoUploadCount,
                 videosUploaded = guest.GuestVideoUploadCount,
                 maxPhotos = MaxPhotos,

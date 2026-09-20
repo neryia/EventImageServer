@@ -25,9 +25,11 @@ builder.Services.AddCors(options =>
 // Add controllers
 // Serialize enums as camelCase strings (e.g. RsvpStatus.Confirmed -> "confirmed")
 // since the React client works with lowercase status strings throughout.
+// Also serialize all property names to camelCase to match JavaScript conventions.
 builder.Services.AddControllers()
     .AddJsonOptions(options =>
     {
+        options.JsonSerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase;
         options.JsonSerializerOptions.Converters.Add(
             new System.Text.Json.Serialization.JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase));
     });

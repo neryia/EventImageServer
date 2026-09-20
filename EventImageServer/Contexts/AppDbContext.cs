@@ -18,6 +18,8 @@ namespace EventImageServer.Contexts
         public DbSet<BudgetExpense> BudgetExpenses { get; set; }
         public DbSet<GuestCategory> GuestCategories { get; set; }
         public DbSet<MessageLog> MessageLogs { get; set; }
+        public DbSet<Album> Albums { get; set; }
+        public DbSet<AlbumMedia> AlbumMedia { get; set; }
 
         public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
 
@@ -113,6 +115,18 @@ namespace EventImageServer.Contexts
                 .HasMany<MessageLog>()
                 .WithOne(m => m.Guest)
                 .HasForeignKey(m => m.GuestId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<Users>()
+                .HasMany<Album>()
+                .WithOne()
+                .HasForeignKey(a => a.OwnerId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<Album>()
+                .HasMany(a => a.Items)
+                .WithOne(m => m.Album)
+                .HasForeignKey(m => m.AlbumId)
                 .OnDelete(DeleteBehavior.Cascade);
         }
     }
