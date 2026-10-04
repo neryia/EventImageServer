@@ -55,7 +55,7 @@ namespace EventImageServer.Controllers
                 return false;
             }
 
-            var now = DateTime.Now;
+            var now = DateTime.UtcNow;
             var start = owner.EventDate.Value;
             var end = start.AddDays(1);
             
@@ -74,7 +74,7 @@ namespace EventImageServer.Controllers
                 return false;
             }
 
-            return DateTime.Now.Date >= owner.EventDate.Value.Date;
+            return DateTime.UtcNow.Date >= owner.EventDate.Value.Date;
         }
 
         // Returns the guest's RSVP details for the given token, and marks the
@@ -87,15 +87,15 @@ namespace EventImageServer.Controllers
                 return NotFound(new { message = "Invalid RSVP link." });
             }
 
-            var guest = _dbContext.Guests
+            var guest = await _dbContext.Guests
                 .Include(g => g.Table)
-                .FirstOrDefault(g => g.RsvpToken == token);
+                .FirstOrDefaultAsync(g => g.RsvpToken == token);
             if (guest == null)
             {
                 return NotFound(new { message = "Invalid RSVP link." });
             }
 
-            var owner = _dbContext.Clients.FirstOrDefault(u => u.Id == guest.OwnerId);
+            var owner = await _dbContext.Clients.AsNoTracking().FirstOrDefaultAsync(u => u.Id == guest.OwnerId);
             var deadline = owner?.RsvpDeadline;
             var deadlinePassed = deadline.HasValue && DateTime.UtcNow > deadline.Value;
 
@@ -138,7 +138,7 @@ namespace EventImageServer.Controllers
                 return NotFound(new { message = "Invalid RSVP link." });
             }
 
-            var guest = _dbContext.Guests.FirstOrDefault(g => g.RsvpToken == token);
+            var guest = await _dbContext.Guests.FirstOrDefaultAsync(g => g.RsvpToken == token);
             if (guest == null)
             {
                 return NotFound(new { message = "Invalid RSVP link." });
@@ -149,7 +149,7 @@ namespace EventImageServer.Controllers
                 return StatusCode(409, new { message = "This guest has opted out of communications." });
             }
 
-            var owner = _dbContext.Clients.FirstOrDefault(u => u.Id == guest.OwnerId);
+            var owner = await _dbContext.Clients.AsNoTracking().FirstOrDefaultAsync(u => u.Id == guest.OwnerId);
             if (owner?.RsvpDeadline.HasValue == true && DateTime.UtcNow > owner.RsvpDeadline.Value)
             {
                 return StatusCode(410, new { message = "The RSVP deadline has passed." });
@@ -228,13 +228,13 @@ namespace EventImageServer.Controllers
                 return NotFound(new { message = "Invalid RSVP link." });
             }
 
-            var guest = _dbContext.Guests.FirstOrDefault(g => g.RsvpToken == token);
+            var guest = await _dbContext.Guests.FirstOrDefaultAsync(g => g.RsvpToken == token);
             if (guest == null)
             {
                 return NotFound(new { message = "Invalid RSVP link." });
             }
 
-            var owner = _dbContext.Clients.FirstOrDefault(u => u.Id == guest.OwnerId);
+            var owner = await _dbContext.Clients.AsNoTracking().FirstOrDefaultAsync(u => u.Id == guest.OwnerId);
             if (!IsUploadWindowOpen(owner))
             {
                 return StatusCode(403, new { message = "Photo/video uploads are only available on the wedding day." });
@@ -320,20 +320,20 @@ namespace EventImageServer.Controllers
         // link, so the guest page can render only their own photos/videos (not
         // every guest's) with the ability to remove and re-upload.
         [HttpGet("{token}/media")]
-        public IActionResult GetGuestMedia(string token)
+        public async Task<IActionResult> GetGuestMedia(string token)
         {
             if (string.IsNullOrWhiteSpace(token))
             {
                 return NotFound(new { message = "Invalid RSVP link." });
             }
 
-            var guest = _dbContext.Guests.FirstOrDefault(g => g.RsvpToken == token);
+            var guest = await _dbContext.Guests.AsNoTracking().FirstOrDefaultAsync(g => g.RsvpToken == token);
             if (guest == null)
             {
                 return NotFound(new { message = "Invalid RSVP link." });
             }
 
-            var media = _dbContext.GuestMedia
+            var media = await _dbContext.GuestMedia.AsNoTracking()
                 .Where(m => m.GuestId == guest.GuestId)
                 .OrderBy(m => m.CreatedAt)
                 .Select(m => new
@@ -342,7 +342,7 @@ namespace EventImageServer.Controllers
                     url = $"/UploadedImages/{guest.OwnerId}/{m.FileName}",
                     type = m.MediaType
                 })
-                .ToList();
+                .ToListAsync();
 
             return Ok(media);
         }
@@ -359,13 +359,13 @@ namespace EventImageServer.Controllers
                 return NotFound(new { message = "Invalid RSVP link." });
             }
 
-            var guest = _dbContext.Guests.FirstOrDefault(g => g.RsvpToken == token);
+            var guest = await _dbContext.Guests.FirstOrDefaultAsync(g => g.RsvpToken == token);
             if (guest == null)
             {
                 return NotFound(new { message = "Invalid RSVP link." });
             }
 
-            var media = _dbContext.GuestMedia.FirstOrDefault(m => m.GuestMediaId == mediaId && m.GuestId == guest.GuestId);
+            var media = await _dbContext.GuestMedia.FirstOrDefaultAsync(m => m.GuestMediaId == mediaId && m.GuestId == guest.GuestId);
             if (media == null)
             {
                 return NotFound(new { message = "Media not found." });
@@ -373,9 +373,17 @@ namespace EventImageServer.Controllers
 
             var folderPath = Path.Combine(Directory.GetCurrentDirectory(), "UploadedImages", guest.OwnerId ?? string.Empty);
             var filePath = Path.Combine(folderPath, media.FileName);
-            var fullFolderPath = Path.GetFullPath(folderPath);
+            var fullFolderPath = Path.GetFullPath(folderPath) + Path.DirectorySeparatorChar;
             var fullFilePath = Path.GetFullPath(filePath);
-            if (fullFilePath.StartsWith(fullFolderPath) && System.IO.File.Exists(fullFilePath))
+            var pathComparison = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+            if (!fullFilePath.StartsWith(fullFolderPath, pathComparison))
+            {
+                return BadRequest(new { message = "Invalid media path." });
+            }
+
+            if (System.IO.File.Exists(fullFilePath))
             {
                 System.IO.File.Delete(fullFilePath);
             }

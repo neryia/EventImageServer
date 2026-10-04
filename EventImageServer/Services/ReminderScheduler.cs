@@ -133,7 +133,7 @@ namespace EventImageServer.Services
                     guest.RsvpTokenCreatedAt = DateTime.UtcNow;
                 }
 
-                var link = $"{baseUrl}/Rsvp/{guest.RsvpToken}";
+                var link = $"{baseUrl}/rsvp/{guest.RsvpToken}";
                 var body = $"Reminder: please RSVP here: {link}";
 
                 var log = new MessageLog

@@ -4,3 +4,7 @@ bin/
 *.db
 *.db-shm
 *.db-wal
+*.db.bak*
+**/obj/
+**/bin/
+**/UploadedImages/

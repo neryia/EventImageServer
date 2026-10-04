@@ -7,6 +7,7 @@ namespace EventImageServer.Contexts
     {
         public DbSet<Users> Clients { get; set; }
         public DbSet<UserMedia> UserMedia { get; set; }
+        public DbSet<OwnerMedia> OwnerMedia { get; set; }
         public DbSet<Table> Tables { get; set; }
         public DbSet<Guest> Guests { get; set; }
         public DbSet<GuestMedia> GuestMedia { get; set; }
@@ -33,6 +34,12 @@ namespace EventImageServer.Contexts
                 .HasMany(c => c.Media)
                 .WithOne(m => m.User)
                 .HasForeignKey(m => m.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<Users>()
+                .HasMany<OwnerMedia>()
+                .WithOne()
+                .HasForeignKey(m => m.OwnerId)
                 .OnDelete(DeleteBehavior.Cascade);
 
             modelBuilder.Entity<Users>()

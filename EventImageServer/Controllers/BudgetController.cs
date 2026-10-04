@@ -22,23 +22,20 @@ public class BudgetController : ControllerBase
     // Loads the current user and verifies they are an EventOwner, delegating
     // the auto-provisioning/role-check logic to the shared EventOwnerResolver
     // (also used by SeatingController and VendorsController).
-    private Users? RequireEventOwner(out IActionResult? errorResult)
+    private async Task<(Users? Owner, IActionResult? Error)> RequireEventOwnerAsync()
     {
-        var resolution = _ownerResolver.Resolve(User, "Only EventOwners manage budgets.");
+        var resolution = await _ownerResolver.ResolveAsync(User, "Only EventOwners manage budgets.");
         if (resolution.Owner == null)
         {
-            errorResult = StatusCode(resolution.ErrorStatusCode!.Value, new { message = resolution.ErrorMessage });
-            return null;
+            return (null, StatusCode(resolution.ErrorStatusCode!.Value, new { message = resolution.ErrorMessage }));
         }
 
         if (resolution.IsReadOnlyViewer && !HttpMethods.IsGet(Request.Method) && !HttpMethods.IsHead(Request.Method))
         {
-            errorResult = StatusCode(403, new { message = "Viewers have read-only access." });
-            return null;
+            return (null, StatusCode(403, new { message = "Viewers have read-only access." }));
         }
 
-        errorResult = null;
-        return resolution.Owner;
+        return (resolution.Owner, null);
     }
 
     // Request DTOs
@@ -67,7 +64,7 @@ public class BudgetController : ControllerBase
     // Helper: Get or create budget for the current user
     private async Task<Budget> GetOrCreateBudgetAsync()
     {
-        var owner = RequireEventOwner(out _);
+        var (owner, _) = await RequireEventOwnerAsync();
         if (owner == null)
         {
             throw new InvalidOperationException("User not authenticated.");
@@ -93,9 +90,7 @@ public class BudgetController : ControllerBase
     [HttpGet]
     public async Task<IActionResult> Get()
     {
-        try
-        {
-            var owner = RequireEventOwner(out var error);
+            var (owner, error) = await RequireEventOwnerAsync();
             if (owner == null)
             {
                 return error!;
@@ -123,20 +118,13 @@ public class BudgetController : ControllerBase
                     vendorId = e.VendorId
                 }).ToList()
             });
-        }
-        catch (Exception e)
-        {
-            return StatusCode(500, new { message = "Error retrieving budget", error = e.Message });
-        }
     }
 
     // PUT /Budget — update total budget
     [HttpPut]
     public async Task<IActionResult> UpdateTotal([FromBody] UpdateBudgetDto request)
     {
-        try
-        {
-            var owner = RequireEventOwner(out var error);
+            var (owner, error) = await RequireEventOwnerAsync();
             if (owner == null)
             {
                 return error!;
@@ -167,25 +155,18 @@ public class BudgetController : ControllerBase
                     vendorId = e.VendorId
                 }).ToList()
             });
-        }
-        catch (Exception e)
-        {
-            return StatusCode(500, new { message = "Error updating budget", error = e.Message });
-        }
     }
 
     // POST /Budget/categories — create a new category
     [HttpPost("categories")]
     public async Task<IActionResult> CreateCategory([FromBody] BudgetCategoryDto request)
     {
-        try
-        {
             if (string.IsNullOrWhiteSpace(request.Name))
             {
                 return BadRequest(new { message = "Category name is required" });
             }
 
-            var owner = RequireEventOwner(out var error);
+            var (owner, error) = await RequireEventOwnerAsync();
             if (owner == null)
             {
                 return error!;
@@ -211,25 +192,18 @@ public class BudgetController : ControllerBase
                 plannedAmount = category.PlannedAmount,
                 linkedVendorCategory = category.LinkedVendorCategory
             });
-        }
-        catch (Exception e)
-        {
-            return StatusCode(500, new { message = "Error creating category", error = e.Message });
-        }
     }
 
     // PUT /Budget/categories/{id} — update a category
     [HttpPut("categories/{id}")]
     public async Task<IActionResult> UpdateCategory(string id, [FromBody] BudgetCategoryDto request)
     {
-        try
-        {
             if (string.IsNullOrWhiteSpace(request.Name))
             {
                 return BadRequest(new { message = "Category name is required" });
             }
 
-            var owner = RequireEventOwner(out var error);
+            var (owner, error) = await RequireEventOwnerAsync();
             if (owner == null)
             {
                 return error!;
@@ -256,20 +230,13 @@ public class BudgetController : ControllerBase
                 plannedAmount = category.PlannedAmount,
                 linkedVendorCategory = category.LinkedVendorCategory
             });
-        }
-        catch (Exception e)
-        {
-            return StatusCode(500, new { message = "Error updating category", error = e.Message });
-        }
     }
 
     // DELETE /Budget/categories/{id} — delete a category (cascade deletes expenses)
     [HttpDelete("categories/{id}")]
     public async Task<IActionResult> DeleteCategory(string id)
     {
-        try
-        {
-            var owner = RequireEventOwner(out var error);
+            var (owner, error) = await RequireEventOwnerAsync();
             if (owner == null)
             {
                 return error!;
@@ -287,19 +254,12 @@ public class BudgetController : ControllerBase
             await _dbContext.SaveChangesAsync();
 
             return Ok(new { message = "Category deleted" });
-        }
-        catch (Exception e)
-        {
-            return StatusCode(500, new { message = "Error deleting category", error = e.Message });
-        }
     }
 
     // POST /Budget/expenses — create a new expense
     [HttpPost("expenses")]
     public async Task<IActionResult> CreateExpense([FromBody] BudgetExpenseDto request)
     {
-        try
-        {
             if (string.IsNullOrWhiteSpace(request.Name))
             {
                 return BadRequest(new { message = "Expense name is required" });
@@ -310,7 +270,7 @@ public class BudgetController : ControllerBase
                 return BadRequest(new { message = "Category ID is required" });
             }
 
-            var owner = RequireEventOwner(out var error);
+            var (owner, error) = await RequireEventOwnerAsync();
             if (owner == null)
             {
                 return error!;
@@ -349,19 +309,12 @@ public class BudgetController : ControllerBase
                 dueDate = expense.DueDate,
                 vendorId = expense.VendorId
             });
-        }
-        catch (Exception e)
-        {
-            return StatusCode(500, new { message = "Error creating expense", error = e.Message });
-        }
     }
 
     // PUT /Budget/expenses/{id} — update an expense
     [HttpPut("expenses/{id}")]
     public async Task<IActionResult> UpdateExpense(string id, [FromBody] BudgetExpenseDto request)
     {
-        try
-        {
             if (string.IsNullOrWhiteSpace(request.Name))
             {
                 return BadRequest(new { message = "Expense name is required" });
@@ -372,7 +325,7 @@ public class BudgetController : ControllerBase
                 return BadRequest(new { message = "Category ID is required" });
             }
 
-            var owner = RequireEventOwner(out var error);
+            var (owner, error) = await RequireEventOwnerAsync();
             if (owner == null)
             {
                 return error!;
@@ -412,20 +365,13 @@ public class BudgetController : ControllerBase
                 dueDate = expense.DueDate,
                 vendorId = expense.VendorId
             });
-        }
-        catch (Exception e)
-        {
-            return StatusCode(500, new { message = "Error updating expense", error = e.Message });
-        }
     }
 
     // DELETE /Budget/expenses/{id} — delete an expense
     [HttpDelete("expenses/{id}")]
     public async Task<IActionResult> DeleteExpense(string id)
     {
-        try
-        {
-            var owner = RequireEventOwner(out var error);
+            var (owner, error) = await RequireEventOwnerAsync();
             if (owner == null)
             {
                 return error!;
@@ -443,10 +389,5 @@ public class BudgetController : ControllerBase
             await _dbContext.SaveChangesAsync();
 
             return Ok(new { message = "Expense deleted" });
-        }
-        catch (Exception e)
-        {
-            return StatusCode(500, new { message = "Error deleting expense", error = e.Message });
-        }
     }
 }

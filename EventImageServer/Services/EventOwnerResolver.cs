@@ -1,6 +1,8 @@
 using System.Security.Claims;
+using System.Text.Json;
 using EventImageServer.Contexts;
 using EventImageServer.Models;
+using Microsoft.EntityFrameworkCore;
 
 namespace EventImageServer.Services
 {
@@ -60,7 +62,7 @@ namespace EventImageServer.Services
         // is a Viewer-role collaborator, so mutating endpoints can reject
         // them while GETs keep working — see each controller's
         // RequireEventOwner()/RequireOwnerId() wrapper.
-        public EventOwnerResolution Resolve(ClaimsPrincipal principal, string roleErrorMessage)
+        public async Task<EventOwnerResolution> ResolveAsync(ClaimsPrincipal principal, string roleErrorMessage)
         {
             var userId = GetUID(principal);
             if (string.IsNullOrEmpty(userId))
@@ -68,9 +70,15 @@ namespace EventImageServer.Services
                 return EventOwnerResolution.Failure(401, "Invalid token, UID not found.");
             }
 
-            var user = _dbContext.Clients.FirstOrDefault(u => u.Id == userId);
+            var user = await _dbContext.Clients.FirstOrDefaultAsync(u => u.Id == userId);
             if (user == null)
             {
+                var emailVerified = principal.FindFirst("email_verified")?.Value;
+                if (IsAnonymous(principal) || string.Equals(emailVerified, "false", StringComparison.OrdinalIgnoreCase))
+                {
+                    return EventOwnerResolution.Failure(403, "A verified account is required.");
+                }
+
                 user = new Users
                 {
                     Id = userId,
@@ -79,7 +87,7 @@ namespace EventImageServer.Services
                     Role = RoleType.EventOwner
                 };
                 _dbContext.Clients.Add(user);
-                _dbContext.SaveChanges();
+                await _dbContext.SaveChangesAsync();
             }
 
             if (user.Role == RoleType.EventOwner)
@@ -87,11 +95,12 @@ namespace EventImageServer.Services
                 return EventOwnerResolution.Success(user);
             }
 
-            var collaboration = _dbContext.EventCollaborators
-                .FirstOrDefault(c => c.CollaboratorUserId == userId && c.AcceptedAt != null);
+            var collaboration = await _dbContext.EventCollaborators
+                .AsNoTracking()
+                .FirstOrDefaultAsync(c => c.CollaboratorUserId == userId && c.AcceptedAt != null);
             if (collaboration != null)
             {
-                var effectiveOwner = _dbContext.Clients.FirstOrDefault(u => u.Id == collaboration.OwnerId);
+                var effectiveOwner = await _dbContext.Clients.FirstOrDefaultAsync(u => u.Id == collaboration.OwnerId);
                 if (effectiveOwner != null)
                 {
                     return EventOwnerResolution.Success(effectiveOwner, collaboration.Role == CollaboratorRole.Viewer);
@@ -99,6 +108,33 @@ namespace EventImageServer.Services
             }
 
             return EventOwnerResolution.Failure(403, roleErrorMessage);
+        }
+
+        private static bool IsAnonymous(ClaimsPrincipal principal)
+        {
+            var signInProvider = principal.FindFirst("firebase.sign_in_provider")?.Value
+                ?? principal.FindFirst("sign_in_provider")?.Value;
+            if (string.Equals(signInProvider, "anonymous", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            var firebaseClaim = principal.FindFirst("firebase")?.Value;
+            if (string.IsNullOrWhiteSpace(firebaseClaim))
+            {
+                return false;
+            }
+
+            try
+            {
+                using var firebase = JsonDocument.Parse(firebaseClaim);
+                return firebase.RootElement.TryGetProperty("sign_in_provider", out var provider)
+                    && string.Equals(provider.GetString(), "anonymous", StringComparison.OrdinalIgnoreCase);
+            }
+            catch (JsonException)
+            {
+                return false;
+            }
         }
     }
 }

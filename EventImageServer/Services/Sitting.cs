@@ -79,15 +79,20 @@
         public ArrangeScoreDto Score { get; set; } = new();
     }
 
-    class Sitting
+    public class SeatingServiceClient
     {
+        private readonly HttpClient _client;
+
+        public SeatingServiceClient(HttpClient client)
+        {
+            _client = client;
+        }
+
         // Sends guests/tables to the Python seating service and returns the
         // arrangement (per-table assignments, unseated guests and a score).
-        public static async Task<ArrangeResponseDto> Arrange(SeatingArrangeRequest request)
+        public async Task<ArrangeResponseDto> Arrange(SeatingArrangeRequest request)
         {
-            var client = new HttpClient();
-
-            var response = await client.PostAsJsonAsync("http://localhost:8000/seating/arrange", request);
+            var response = await _client.PostAsJsonAsync("seating/arrange", request);
             response.EnsureSuccessStatusCode();
 
             var result = await response.Content.ReadFromJsonAsync<ArrangeResponseDto>();

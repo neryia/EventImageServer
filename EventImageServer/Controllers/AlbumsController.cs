@@ -66,13 +66,13 @@ public class AlbumsController : ControllerBase
             return Unauthorized(new { message = "Invalid token, UID not found." });
         }
 
-        var albums = await _dbContext.Albums
+        var albums = await _dbContext.Albums.AsNoTracking()
             .Where(a => a.OwnerId == userId)
             .OrderByDescending(a => a.CreatedAt)
             .ToListAsync();
 
         var albumIds = albums.Select(a => a.AlbumId).ToList();
-        var counts = await _dbContext.AlbumMedia
+        var counts = await _dbContext.AlbumMedia.AsNoTracking()
             .Where(m => albumIds.Contains(m.AlbumId))
             .GroupBy(m => m.AlbumId)
             .Select(g => new { AlbumId = g.Key, Count = g.Count() })
@@ -100,13 +100,13 @@ public class AlbumsController : ControllerBase
             return Unauthorized(new { message = "Invalid token, UID not found." });
         }
 
-        var album = await _dbContext.Albums.FirstOrDefaultAsync(a => a.AlbumId == id && a.OwnerId == userId);
+        var album = await _dbContext.Albums.AsNoTracking().FirstOrDefaultAsync(a => a.AlbumId == id && a.OwnerId == userId);
         if (album == null)
         {
             return NotFound(new { message = "Album not found." });
         }
 
-        var items = await _dbContext.AlbumMedia
+        var items = await _dbContext.AlbumMedia.AsNoTracking()
             .Where(m => m.AlbumId == id)
             .OrderBy(m => m.SortOrder)
             .ThenBy(m => m.CreatedAt)
@@ -192,7 +192,7 @@ public class AlbumsController : ControllerBase
 
         if (request.CoverFileName != null)
         {
-            var belongsToAlbum = await _dbContext.AlbumMedia
+            var belongsToAlbum = await _dbContext.AlbumMedia.AsNoTracking()
                 .AnyAsync(m => m.AlbumId == id && m.FileName == request.CoverFileName);
             if (!belongsToAlbum)
             {
@@ -251,7 +251,7 @@ public class AlbumsController : ControllerBase
             return BadRequest(new { message = "No files provided." });
         }
 
-        var existing = await _dbContext.AlbumMedia
+        var existing = await _dbContext.AlbumMedia.AsNoTracking()
             .Where(m => m.AlbumId == id)
             .Select(m => m.FileName)
             .ToListAsync();

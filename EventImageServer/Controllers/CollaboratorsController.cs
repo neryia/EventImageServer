@@ -27,9 +27,9 @@ public class CollaboratorsController : ControllerBase
     // authenticated caller (owner, CoOwner, or Viewer collaborator) can call
     // this; it never 403s of its own accord, it just reports the role.
     [HttpGet("MyAccess")]
-    public IActionResult GetMyAccess()
+    public async Task<IActionResult> GetMyAccess()
     {
-        var resolution = _ownerResolver.Resolve(User, "Not associated with any event.");
+        var resolution = await _ownerResolver.ResolveAsync(User, "Not associated with any event.");
         if (resolution.Owner == null)
         {
             return StatusCode(resolution.ErrorStatusCode ?? 401, new { message = resolution.ErrorMessage });
@@ -56,16 +56,15 @@ public class CollaboratorsController : ControllerBase
     // collaborator can never invite/revoke further collaborators on the
     // owner's behalf. Auto-provisions a brand-new UID as an EventOwner,
     // matching every other controller's first-request behavior.
-    private Users? RequireLiteralEventOwner(out IActionResult? errorResult)
+    private async Task<(Users? Owner, IActionResult? Error)> RequireLiteralEventOwnerAsync()
     {
         var userId = GetUID();
         if (string.IsNullOrEmpty(userId))
         {
-            errorResult = Unauthorized(new { message = "Invalid token, UID not found." });
-            return null;
+            return (null, Unauthorized(new { message = "Invalid token, UID not found." }));
         }
 
-        var user = _dbContext.Clients.FirstOrDefault(u => u.Id == userId);
+        var user = await _dbContext.Clients.FirstOrDefaultAsync(u => u.Id == userId);
         if (user == null)
         {
             user = new Users
@@ -76,17 +75,15 @@ public class CollaboratorsController : ControllerBase
                 Role = RoleType.EventOwner
             };
             _dbContext.Clients.Add(user);
-            _dbContext.SaveChanges();
+            await _dbContext.SaveChangesAsync();
         }
 
         if (user.Role != RoleType.EventOwner)
         {
-            errorResult = StatusCode(403, new { message = "Only the event owner manages collaborators." });
-            return null;
+            return (null, StatusCode(403, new { message = "Only the event owner manages collaborators." }));
         }
 
-        errorResult = null;
-        return user;
+        return (user, null);
     }
 
     public class InviteCollaboratorRequest
@@ -96,18 +93,18 @@ public class CollaboratorsController : ControllerBase
     }
 
     [HttpGet]
-    public IActionResult GetCollaborators()
+    public async Task<IActionResult> GetCollaborators()
     {
-        var owner = RequireLiteralEventOwner(out var error);
+        var (owner, error) = await RequireLiteralEventOwnerAsync();
         if (owner == null)
         {
             return error!;
         }
 
-        var collaborators = _dbContext.EventCollaborators
+        var collaborators = await _dbContext.EventCollaborators.AsNoTracking()
             .Where(c => c.OwnerId == owner.Id)
             .OrderByDescending(c => c.InvitedAt)
-            .ToList();
+            .ToListAsync();
 
         return Ok(collaborators);
     }
@@ -115,7 +112,7 @@ public class CollaboratorsController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> InviteCollaborator([FromBody] InviteCollaboratorRequest request)
     {
-        var owner = RequireLiteralEventOwner(out var error);
+        var (owner, error) = await RequireLiteralEventOwnerAsync();
         if (owner == null)
         {
             return error!;
@@ -181,7 +178,7 @@ public class CollaboratorsController : ControllerBase
     [HttpDelete("{id}")]
     public async Task<IActionResult> RevokeCollaborator(int id)
     {
-        var owner = RequireLiteralEventOwner(out var error);
+        var (owner, error) = await RequireLiteralEventOwnerAsync();
         if (owner == null)
         {
             return error!;
@@ -212,6 +209,11 @@ public class CollaboratorsController : ControllerBase
     [HttpPost("Accept/{token}")]
     public async Task<IActionResult> AcceptInvite(string token)
     {
+        if (User.Identity?.IsAuthenticated != true)
+        {
+            return Unauthorized(new { message = "Authentication is required to accept an invite." });
+        }
+
         var userId = GetUID();
         if (string.IsNullOrEmpty(userId))
         {
@@ -235,14 +237,13 @@ public class CollaboratorsController : ControllerBase
             return BadRequest(new { message = "This invite has expired." });
         }
 
-        var callerEmail = (User.FindFirst("email")?.Value ?? string.Empty).Trim().ToLowerInvariant();
-        // Anonymous Firebase sign-ins (used so an invited collaborator never
-        // has to register/create a password account) have no email claim at
-        // all. In that case we skip the email match and rely solely on the
-        // invite token itself (secret, single-use, expiring) as proof of
-        // authorization. If the caller IS signed in with a real account that
-        // has an email, it must still match the invited address.
-        if (!string.IsNullOrEmpty(callerEmail) && callerEmail != collaboration.CollaboratorEmail)
+        var emailVerified = string.Equals(
+            User.FindFirst("email_verified")?.Value,
+            "true",
+            StringComparison.OrdinalIgnoreCase);
+        var callerEmail = (User.FindFirst("email")?.Value ?? string.Empty).Trim();
+        if (!emailVerified || string.IsNullOrEmpty(callerEmail)
+            || !string.Equals(callerEmail, collaboration.CollaboratorEmail.Trim(), StringComparison.OrdinalIgnoreCase))
         {
             return StatusCode(403, new { message = "This invite was sent to a different email address." });
         }
@@ -250,7 +251,7 @@ public class CollaboratorsController : ControllerBase
         // Auto-provision the accepting user's own Users row (as a plain
         // User, not EventOwner) if this is their first authenticated
         // request, so EventOwnerResolver.Resolve() has a row to find them by.
-        var user = _dbContext.Clients.FirstOrDefault(u => u.Id == userId);
+        var user = await _dbContext.Clients.FirstOrDefaultAsync(u => u.Id == userId);
         if (user == null)
         {
             user = new Users

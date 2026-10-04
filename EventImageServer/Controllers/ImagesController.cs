@@ -1,7 +1,9 @@
 ﻿using EventImageServer.Contexts;
+using EventImageServer.Models;
 using EventImageServer.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 [Route("[controller]")]
 [ApiController]
@@ -21,41 +23,30 @@ public class ImagesController : ControllerBase
     // following an accepted collaborator invite exactly like Seating,
     // Budget, Vendors, etc.), so collaborators see and manage the same
     // gallery/folder as the owner instead of their own empty one.
-    private string? RequireOwnerId(out IActionResult? error)
+    private async Task<(string? OwnerId, IActionResult? Error)> RequireOwnerIdAsync()
     {
-        var resolution = _ownerResolver.Resolve(User, "Only the event owner or an invited collaborator can manage images.");
+        var resolution = await _ownerResolver.ResolveAsync(User, "Only the event owner or an invited collaborator can manage images.");
         if (resolution.Owner == null)
         {
-            error = StatusCode(resolution.ErrorStatusCode ?? 401, new { message = resolution.ErrorMessage });
-            return null;
+            return (null, StatusCode(resolution.ErrorStatusCode ?? 401, new { message = resolution.ErrorMessage }));
         }
         if (resolution.IsReadOnlyViewer && !HttpMethods.IsGet(Request.Method) && !HttpMethods.IsHead(Request.Method))
         {
-            error = StatusCode(403, new { message = "Viewers have read-only access." });
-            return null;
+            return (null, StatusCode(403, new { message = "Viewers have read-only access." }));
         }
-        error = null;
-        return resolution.Owner.Id;
+        return (resolution.Owner.Id, null);
     }
 
     private string GetMediaType(string fileName)
     {
-        var ext = Path.GetExtension(fileName).ToLower();
-
-        return ext switch
-        {
-            ".mp4" or ".webm" or ".ogg" => "video",
-            _ => "image"
-        };
+        return MediaRules.Classify(fileName) ?? "image";
     }
 
 
     [HttpGet("Gallery")]
-    public IActionResult GetImages()
+        public async Task<IActionResult> GetImages()
     {
-        try
-        {
-            var userId = RequireOwnerId(out var error);
+            var (userId, error) = await RequireOwnerIdAsync();
             if (userId == null)
             {
                 return error!;
@@ -71,14 +62,14 @@ public class ImagesController : ControllerBase
             // so the owner's gallery can be grouped by guest instead of one
             // flat, unordered list. Files with no matching GuestMedia row are
             // the owner's own uploads.
-            var guestMediaByFileName = _dbContext.GuestMedia
+            var guestMediaByFileName = await _dbContext.GuestMedia.AsNoTracking()
                 .Where(m => m.OwnerId == userId)
-                .ToDictionary(m => m.FileName, m => m);
+                .ToDictionaryAsync(m => m.FileName, m => m);
 
             var guestIds = guestMediaByFileName.Values.Select(m => m.GuestId).Distinct().ToList();
-            var guestNamesById = _dbContext.Guests
+            var guestNamesById = await _dbContext.Guests.AsNoTracking()
                 .Where(g => guestIds.Contains(g.GuestId))
-                .ToDictionary(g => g.GuestId, g => g.Name);
+                .ToDictionaryAsync(g => g.GuestId, g => g.Name);
 
             var files = Directory.GetFiles(folderPath)
                                  .Select(f =>
@@ -106,17 +97,12 @@ public class ImagesController : ControllerBase
                                  .ToList();
 
             return Ok(files);
-        }
-        catch (Exception e)
-        {
-            return StatusCode(500, new { message = "Error retrieving gallery", error = e.Message });
-        }
     }
 
     [HttpPost("Upload")]
     public async Task<IActionResult> UploadImage(IFormFile file)
     {
-        var userId = RequireOwnerId(out var error);
+        var (userId, error) = await RequireOwnerIdAsync();
         if (userId == null)
         {
             return error!;
@@ -125,6 +111,19 @@ public class ImagesController : ControllerBase
         if (file == null || file.Length == 0)
         {
             return BadRequest("No file uploaded.");
+        }
+
+        if (MediaRules.Classify(file.FileName) == null)
+        {
+            return BadRequest(new { message = "Unsupported file type." });
+        }
+
+        using (var probe = file.OpenReadStream())
+        {
+            if (!MediaRules.LooksLikeMedia(file.FileName, probe))
+            {
+                return BadRequest(new { message = "File content does not match its type." });
+            }
         }
 
         var folderPath = Path.Combine(Directory.GetCurrentDirectory(), "UploadedImages", userId);
@@ -140,6 +139,16 @@ public class ImagesController : ControllerBase
         {
             await file.CopyToAsync(stream);
         }
+
+        _dbContext.OwnerMedia.Add(new OwnerMedia
+        {
+            OwnerId = userId,
+            FileName = fileName,
+            MediaType = GetMediaType(fileName),
+            CreatedAt = DateTime.UtcNow,
+            ShowOnWall = false,
+        });
+        await _dbContext.SaveChangesAsync();
 
         return Ok(new
         {
@@ -162,9 +171,7 @@ public class ImagesController : ControllerBase
 
     private async Task<IActionResult> DeleteImageInternal(string fileName)
     {
-        try
-        {
-            var userId = RequireOwnerId(out var error);
+            var (userId, error) = await RequireOwnerIdAsync();
             if (userId == null)
             {
                 return error!;
@@ -179,10 +186,13 @@ public class ImagesController : ControllerBase
             var filePath = Path.Combine(folderPath, fileName);
 
             // Security: ensure the file is within the user's folder
-            var fullFolderPath = Path.GetFullPath(folderPath);
+            var fullFolderPath = Path.GetFullPath(folderPath) + Path.DirectorySeparatorChar;
             var fullFilePath = Path.GetFullPath(filePath);
+            var pathComparison = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
 
-            if (!fullFilePath.StartsWith(fullFolderPath))
+            if (!fullFilePath.StartsWith(fullFolderPath, pathComparison))
             {
                 return BadRequest(new { message = "Invalid file path." });
             }
@@ -194,17 +204,26 @@ public class ImagesController : ControllerBase
 
             System.IO.File.Delete(fullFilePath);
 
+            var ownerMedia = await _dbContext.OwnerMedia
+                .Where(m => m.OwnerId == userId && m.FileName == fileName)
+                .ToListAsync();
+            if (ownerMedia.Count > 0)
+            {
+                _dbContext.OwnerMedia.RemoveRange(ownerMedia);
+                await _dbContext.SaveChangesAsync();
+            }
+
             // Keep guest-facing RSVP media list in sync: if this file was
             // uploaded via a guest's RSVP link, remove its GuestMedia row(s)
             // and free up the guest's upload quota too, so the guest no
             // longer sees it after the owner deletes it from their gallery.
-            var trackedEntries = _dbContext.GuestMedia
+            var trackedEntries = await _dbContext.GuestMedia
                 .Where(m => m.OwnerId == userId && m.FileName == fileName)
-                .ToList();
+                .ToListAsync();
             if (trackedEntries.Count > 0)
             {
                 var guestIds = trackedEntries.Select(m => m.GuestId).Distinct().ToList();
-                var guests = _dbContext.Guests.Where(g => guestIds.Contains(g.GuestId)).ToList();
+                var guests = await _dbContext.Guests.Where(g => guestIds.Contains(g.GuestId)).ToListAsync();
                 foreach (var entry in trackedEntries)
                 {
                     var guest = guests.FirstOrDefault(g => g.GuestId == entry.GuestId);
@@ -225,10 +244,5 @@ public class ImagesController : ControllerBase
             }
 
             return Ok(new { message = "File deleted successfully." });
-        }
-        catch (Exception e)
-        {
-            return StatusCode(500, new { message = "Error deleting file", error = e.Message });
-        }
     }
 }

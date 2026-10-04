@@ -9,10 +9,8 @@ namespace EventImageServer.Controllers
 {
     // Public, unauthenticated endpoint powering the live photo wall
     // (/wall/{token} on the client) — a read-only slideshow mixing guest
-    // uploads (GuestMedia rows) with the owner's own uploads from the same
-    // UploadedImages/{ownerId}/ folder (any file with no matching GuestMedia
-    // row, same distinction ImagesController.GetImages uses for the owner's
-    // gallery view).
+    // uploads (GuestMedia rows) with owner uploads explicitly approved for
+    // public display (OwnerMedia rows where ShowOnWall is true).
     [Route("[controller]")]
     [ApiController]
     [AllowAnonymous]
@@ -38,7 +36,7 @@ namespace EventImageServer.Controllers
                 return false;
             }
 
-            var now = DateTime.Now;
+            var now = DateTime.UtcNow;
             var start = owner.EventDate.Value.AddHours(-2); // opens 2 hours early
             var end = owner.EventDate.Value.AddDays(2); // one extra grace day vs. the upload window
             return now >= start && now <= end;
@@ -46,9 +44,8 @@ namespace EventImageServer.Controllers
 
         // Deliberately has NO guest-identifying field (name, phone, etc.) —
         // this DTO is served [AllowAnonymous] to anyone holding the wall
-        // token, so it must not leak who uploaded what. Id is a string since
-        // owner uploads (plain files, no DB row) use their file name, while
-        // guest uploads use their GuestMedia row id.
+        // token, so it must not leak who uploaded what. Id is a string to
+        // accommodate both guest and owner media record identifiers.
         public class WallMediaDto
         {
             public string Id { get; set; } = string.Empty;
@@ -57,28 +54,18 @@ namespace EventImageServer.Controllers
             public DateTime CreatedAt { get; set; }
         }
 
-        private static string GetMediaType(string fileName)
-        {
-            var ext = Path.GetExtension(fileName).ToLower();
-            return ext switch
-            {
-                ".mp4" or ".webm" or ".ogg" => "video",
-                _ => "image"
-            };
-        }
-
         // GET /Wall/{token}?since={iso}
         // Returns media created after `since` (or everything, if omitted),
         // newest first, capped at 100 items per call.
         [HttpGet("{token}")]
-        public IActionResult GetWallMedia(string token, [FromQuery] DateTime? since)
+        public async Task<IActionResult> GetWallMedia(string token, [FromQuery] DateTime? since)
         {
             if (string.IsNullOrWhiteSpace(token))
             {
                 return NotFound(new { message = "Wall not found." });
             }
 
-            var owner = _dbContext.Clients.FirstOrDefault(u => u.WallToken == token);
+            var owner = await _dbContext.Clients.AsNoTracking().FirstOrDefaultAsync(u => u.WallToken == token);
             if (owner == null)
             {
                 return NotFound(new { message = "Wall not found." });
@@ -105,7 +92,8 @@ namespace EventImageServer.Controllers
                 }
 
                 var opensAt = owner.EventDate.Value.AddHours(-2);
-                if (DateTime.Now > opensAt)
+                var now = DateTime.UtcNow;
+                if (now > opensAt)
                 {
                     return StatusCode(403, new
                     {
@@ -114,7 +102,7 @@ namespace EventImageServer.Controllers
                     });
                 }
 
-                var secondsUntilOpen = Math.Max(0, (int)(opensAt - DateTime.Now).TotalSeconds);
+                var secondsUntilOpen = Math.Max(0, (int)(opensAt - now).TotalSeconds);
                 return StatusCode(403, new
                 {
                     message = "This photo wall isn't open yet.",
@@ -122,9 +110,9 @@ namespace EventImageServer.Controllers
                 });
             }
 
-            var guestMedia = _dbContext.GuestMedia
-                .Where(m => m.OwnerId == owner.Id)
-                .ToList();
+            var guestMedia = await _dbContext.GuestMedia.AsNoTracking()
+                .Where(m => m.OwnerId == owner.Id && (!since.HasValue || m.CreatedAt > since.Value))
+                .ToListAsync();
 
             var wallItems = guestMedia
                 .Select(m => new WallMediaDto
@@ -136,33 +124,35 @@ namespace EventImageServer.Controllers
                 })
                 .ToList();
 
-            // Owner's own uploads: any file in their folder with no matching
-            // GuestMedia row. They have no DB row of their own, so the file's
-            // last-write time stands in for CreatedAt.
-            var guestFileNames = new HashSet<string>(guestMedia.Select(m => m.FileName));
+            // Only owner uploads explicitly approved for the public wall are
+            // included. Untracked legacy files and private uploads stay hidden.
+            var ownerMedia = await _dbContext.OwnerMedia.AsNoTracking()
+                .Where(m => m.OwnerId == owner.Id && m.ShowOnWall
+                    && (!since.HasValue || m.CreatedAt > since.Value)
+                    && !_dbContext.GuestMedia.Any(g => g.OwnerId == owner.Id && g.FileName == m.FileName))
+                .ToListAsync();
             var folderPath = Path.Combine(Directory.GetCurrentDirectory(), "UploadedImages", owner.Id!);
             if (Directory.Exists(folderPath))
             {
-                foreach (var filePath in Directory.GetFiles(folderPath))
+                foreach (var item in ownerMedia)
                 {
-                    var fileName = Path.GetFileName(filePath);
-                    if (guestFileNames.Contains(fileName))
+                    var filePath = Path.Combine(folderPath, item.FileName);
+                    if (!System.IO.File.Exists(filePath))
                     {
                         continue;
                     }
 
                     wallItems.Add(new WallMediaDto
                     {
-                        Id = fileName,
-                        Url = $"/UploadedImages/{owner.Id}/{fileName}",
-                        MediaType = GetMediaType(fileName),
-                        CreatedAt = System.IO.File.GetLastWriteTimeUtc(filePath),
+                        Id = item.OwnerMediaId.ToString(),
+                        Url = $"/UploadedImages/{owner.Id}/{item.FileName}",
+                        MediaType = item.MediaType,
+                        CreatedAt = item.CreatedAt,
                     });
                 }
             }
 
             var media = wallItems
-                .Where(m => !since.HasValue || m.CreatedAt > since.Value)
                 .OrderByDescending(m => m.CreatedAt)
                 .Take(100)
                 .ToList();

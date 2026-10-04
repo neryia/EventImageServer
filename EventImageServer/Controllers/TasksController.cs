@@ -19,23 +19,20 @@ public class TasksController : ControllerBase
         _ownerResolver = ownerResolver;
     }
 
-    private Users? RequireEventOwner(out IActionResult? errorResult)
+    private async Task<(Users? Owner, IActionResult? Error)> RequireEventOwnerAsync()
     {
-        var resolution = _ownerResolver.Resolve(User, "Only EventOwners manage a planning checklist.");
+        var resolution = await _ownerResolver.ResolveAsync(User, "Only EventOwners manage a planning checklist.");
         if (resolution.Owner == null)
         {
-            errorResult = StatusCode(resolution.ErrorStatusCode!.Value, new { message = resolution.ErrorMessage });
-            return null;
+            return (null, StatusCode(resolution.ErrorStatusCode!.Value, new { message = resolution.ErrorMessage }));
         }
 
         if (resolution.IsReadOnlyViewer && !HttpMethods.IsGet(Request.Method) && !HttpMethods.IsHead(Request.Method))
         {
-            errorResult = StatusCode(403, new { message = "Viewers have read-only access." });
-            return null;
+            return (null, StatusCode(403, new { message = "Viewers have read-only access." }));
         }
 
-        errorResult = null;
-        return resolution.Owner;
+        return (resolution.Owner, null);
     }
 
     public class TaskRequest
@@ -98,9 +95,7 @@ public class TasksController : ControllerBase
     [HttpGet]
     public async Task<IActionResult> GetTasks()
     {
-        try
-        {
-            var owner = RequireEventOwner(out var error);
+            var (owner, error) = await RequireEventOwnerAsync();
             if (owner == null)
             {
                 return error!;
@@ -116,20 +111,13 @@ public class TasksController : ControllerBase
                 .ToListAsync();
 
             return Ok(tasks);
-        }
-        catch (Exception e)
-        {
-            return StatusCode(500, new { message = "Error retrieving tasks", error = e.Message });
-        }
     }
 
     // POST /Tasks
     [HttpPost]
     public async Task<IActionResult> CreateTask([FromBody] TaskRequest request)
     {
-        try
-        {
-            var owner = RequireEventOwner(out var error);
+            var (owner, error) = await RequireEventOwnerAsync();
             if (owner == null)
             {
                 return error!;
@@ -159,20 +147,13 @@ public class TasksController : ControllerBase
             await _dbContext.SaveChangesAsync();
 
             return Ok(task);
-        }
-        catch (Exception e)
-        {
-            return StatusCode(500, new { message = "Error creating task", error = e.Message });
-        }
     }
 
     // PUT /Tasks/{id}
     [HttpPut("{id}")]
     public async Task<IActionResult> UpdateTask(int id, [FromBody] TaskRequest request)
     {
-        try
-        {
-            var owner = RequireEventOwner(out var error);
+            var (owner, error) = await RequireEventOwnerAsync();
             if (owner == null)
             {
                 return error!;
@@ -197,20 +178,13 @@ public class TasksController : ControllerBase
             await _dbContext.SaveChangesAsync();
 
             return Ok(task);
-        }
-        catch (Exception e)
-        {
-            return StatusCode(500, new { message = "Error updating task", error = e.Message });
-        }
     }
 
     // PATCH /Tasks/{id}/Done { isDone }
     [HttpPatch("{id}/Done")]
     public async Task<IActionResult> SetTaskDone(int id, [FromBody] SetDoneRequest request)
     {
-        try
-        {
-            var owner = RequireEventOwner(out var error);
+            var (owner, error) = await RequireEventOwnerAsync();
             if (owner == null)
             {
                 return error!;
@@ -228,11 +202,6 @@ public class TasksController : ControllerBase
             await _dbContext.SaveChangesAsync();
 
             return Ok(task);
-        }
-        catch (Exception e)
-        {
-            return StatusCode(500, new { message = "Error updating task", error = e.Message });
-        }
     }
 
     public class SetDoneRequest
@@ -244,9 +213,7 @@ public class TasksController : ControllerBase
     [HttpDelete("{id}")]
     public async Task<IActionResult> DeleteTask(int id)
     {
-        try
-        {
-            var owner = RequireEventOwner(out var error);
+            var (owner, error) = await RequireEventOwnerAsync();
             if (owner == null)
             {
                 return error!;
@@ -262,10 +229,5 @@ public class TasksController : ControllerBase
             await _dbContext.SaveChangesAsync();
 
             return Ok(new { message = "Deleted." });
-        }
-        catch (Exception e)
-        {
-            return StatusCode(500, new { message = "Error deleting task", error = e.Message });
-        }
     }
 }

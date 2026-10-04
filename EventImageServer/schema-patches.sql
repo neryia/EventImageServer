@@ -112,6 +112,17 @@ CREATE TABLE IF NOT EXISTS EventCollaborators (
 CREATE UNIQUE INDEX IF NOT EXISTS IX_EventCollaborators_Owner_Email ON EventCollaborators (OwnerId, CollaboratorEmail);
 CREATE UNIQUE INDEX IF NOT EXISTS IX_EventCollaborators_InviteToken ON EventCollaborators (InviteToken);
 
+-- Owner uploads are private unless explicitly approved for the public wall.
+CREATE TABLE IF NOT EXISTS OwnerMedia (
+  OwnerMediaId INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  OwnerId TEXT NOT NULL,
+  FileName TEXT NOT NULL,
+  MediaType TEXT NOT NULL,
+  CreatedAt TEXT NOT NULL,
+  ShowOnWall INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS IX_OwnerMedia_OwnerId ON OwnerMedia (OwnerId);
+
 -- Example pattern for a future ALTER TABLE ... ADD COLUMN — check first
 -- (SQLite has no "ADD COLUMN IF NOT EXISTS", and a RAISE(IGNORE) guard does
 -- NOT work outside a trigger — verified against sqlite3 3.43):

@@ -23,23 +23,20 @@ public class VendorsController : ControllerBase
     // the auto-provisioning/role-check logic to the shared EventOwnerResolver
     // (also used by SeatingController and BudgetController).
     // Returns null and sets errorResult when the check fails.
-    private Users? RequireEventOwner(out IActionResult? errorResult)
+    private async Task<(Users? Owner, IActionResult? Error)> RequireEventOwnerAsync()
     {
-        var resolution = _ownerResolver.Resolve(User, "Only EventOwners manage vendors.");
+        var resolution = await _ownerResolver.ResolveAsync(User, "Only EventOwners manage vendors.");
         if (resolution.Owner == null)
         {
-            errorResult = StatusCode(resolution.ErrorStatusCode!.Value, new { message = resolution.ErrorMessage });
-            return null;
+            return (null, StatusCode(resolution.ErrorStatusCode!.Value, new { message = resolution.ErrorMessage }));
         }
 
         if (resolution.IsReadOnlyViewer && !HttpMethods.IsGet(Request.Method) && !HttpMethods.IsHead(Request.Method))
         {
-            errorResult = StatusCode(403, new { message = "Viewers have read-only access." });
-            return null;
+            return (null, StatusCode(403, new { message = "Viewers have read-only access." }));
         }
 
-        errorResult = null;
-        return resolution.Owner;
+        return (resolution.Owner, null);
     }
 
     public class VendorRequest
@@ -79,17 +76,15 @@ public class VendorsController : ControllerBase
     // Returns the vendor list for the current EventOwner, optionally filtered
     // by category and/or status.
     [HttpGet]
-    public IActionResult GetVendors([FromQuery] VendorCategory? category, [FromQuery] VendorStatus? status)
+    public async Task<IActionResult> GetVendors([FromQuery] VendorCategory? category, [FromQuery] VendorStatus? status)
     {
-        try
-        {
-            var owner = RequireEventOwner(out var error);
+            var (owner, error) = await RequireEventOwnerAsync();
             if (owner == null)
             {
                 return error!;
             }
 
-            var query = _dbContext.Vendors
+            var query = _dbContext.Vendors.AsNoTracking()
                 .Where(v => v.OwnerId == owner.Id)
                 .Include(v => v.Timeline)
                 .Include(v => v.Attachments)
@@ -105,33 +100,26 @@ public class VendorsController : ControllerBase
                 query = query.Where(v => v.Status == status.Value);
             }
 
-            var vendors = query.OrderBy(v => v.VendorId).ToList();
+            var vendors = await query.OrderBy(v => v.VendorId).ToListAsync();
 
             return Ok(vendors);
-        }
-        catch (Exception e)
-        {
-            return StatusCode(500, new { message = "Error retrieving vendors", error = e.Message });
-        }
     }
 
     // Dashboard summary: counts by status, overall progress, and vendors
     // needing a payment in the next 7 days.
     [HttpGet("summary")]
-    public IActionResult GetSummary()
+    public async Task<IActionResult> GetSummary()
     {
-        try
-        {
-            var owner = RequireEventOwner(out var error);
+            var (owner, error) = await RequireEventOwnerAsync();
             if (owner == null)
             {
                 return error!;
             }
 
-            var vendors = _dbContext.Vendors
+            var vendors = await _dbContext.Vendors.AsNoTracking()
                 .Where(v => v.OwnerId == owner.Id)
                 .Include(v => v.Timeline)
-                .ToList();
+                .ToListAsync();
 
             var byStatus = vendors
                 .GroupBy(v => v.Status)
@@ -159,29 +147,22 @@ public class VendorsController : ControllerBase
                 overallProgress,
                 needsPaymentThisWeek
             });
-        }
-        catch (Exception e)
-        {
-            return StatusCode(500, new { message = "Error retrieving vendor summary", error = e.Message });
-        }
     }
 
     [HttpGet("{id}")]
-    public IActionResult GetVendor(int id)
+    public async Task<IActionResult> GetVendor(int id)
     {
-        try
-        {
-            var owner = RequireEventOwner(out var error);
+            var (owner, error) = await RequireEventOwnerAsync();
             if (owner == null)
             {
                 return error!;
             }
 
-            var vendor = _dbContext.Vendors
+            var vendor = await _dbContext.Vendors.AsNoTracking()
                 .Where(v => v.VendorId == id && v.OwnerId == owner.Id)
                 .Include(v => v.Timeline)
                 .Include(v => v.Attachments)
-                .FirstOrDefault();
+                .FirstOrDefaultAsync();
 
             if (vendor == null)
             {
@@ -189,17 +170,12 @@ public class VendorsController : ControllerBase
             }
 
             return Ok(vendor);
-        }
-        catch (Exception e)
-        {
-            return StatusCode(500, new { message = "Error retrieving vendor", error = e.Message });
-        }
     }
 
     [HttpPost]
     public async Task<IActionResult> CreateVendor([FromBody] VendorRequest request)
     {
-        var owner = RequireEventOwner(out var error);
+        var (owner, error) = await RequireEventOwnerAsync();
         if (owner == null)
         {
             return error!;
@@ -241,13 +217,13 @@ public class VendorsController : ControllerBase
     [HttpPut("{id}")]
     public async Task<IActionResult> UpdateVendor(int id, [FromBody] VendorRequest request)
     {
-        var owner = RequireEventOwner(out var error);
+        var (owner, error) = await RequireEventOwnerAsync();
         if (owner == null)
         {
             return error!;
         }
 
-        var vendor = _dbContext.Vendors.FirstOrDefault(v => v.VendorId == id && v.OwnerId == owner.Id);
+        var vendor = await _dbContext.Vendors.FirstOrDefaultAsync(v => v.VendorId == id && v.OwnerId == owner.Id);
         if (vendor == null)
         {
             return NotFound(new { message = "Vendor not found." });
@@ -278,13 +254,13 @@ public class VendorsController : ControllerBase
     [HttpDelete("{id}")]
     public async Task<IActionResult> DeleteVendor(int id)
     {
-        var owner = RequireEventOwner(out var error);
+        var (owner, error) = await RequireEventOwnerAsync();
         if (owner == null)
         {
             return error!;
         }
 
-        var vendor = _dbContext.Vendors.FirstOrDefault(v => v.VendorId == id && v.OwnerId == owner.Id);
+        var vendor = await _dbContext.Vendors.FirstOrDefaultAsync(v => v.VendorId == id && v.OwnerId == owner.Id);
         if (vendor == null)
         {
             return NotFound(new { message = "Vendor not found." });
@@ -306,13 +282,13 @@ public class VendorsController : ControllerBase
     [HttpPatch("{id}/status")]
     public async Task<IActionResult> UpdateStatus(int id, [FromBody] StatusRequest request)
     {
-        var owner = RequireEventOwner(out var error);
+        var (owner, error) = await RequireEventOwnerAsync();
         if (owner == null)
         {
             return error!;
         }
 
-        var vendor = _dbContext.Vendors.FirstOrDefault(v => v.VendorId == id && v.OwnerId == owner.Id);
+        var vendor = await _dbContext.Vendors.FirstOrDefaultAsync(v => v.VendorId == id && v.OwnerId == owner.Id);
         if (vendor == null)
         {
             return NotFound(new { message = "Vendor not found." });
@@ -327,16 +303,16 @@ public class VendorsController : ControllerBase
     [HttpPatch("{id}/timeline")]
     public async Task<IActionResult> UpdateTimelineStep(int id, [FromBody] TimelineStepRequest request)
     {
-        var owner = RequireEventOwner(out var error);
+        var (owner, error) = await RequireEventOwnerAsync();
         if (owner == null)
         {
             return error!;
         }
 
-        var vendor = _dbContext.Vendors
+        var vendor = await _dbContext.Vendors
             .Where(v => v.VendorId == id && v.OwnerId == owner.Id)
             .Include(v => v.Timeline)
-            .FirstOrDefault();
+            .FirstOrDefaultAsync();
 
         if (vendor == null)
         {
@@ -360,13 +336,13 @@ public class VendorsController : ControllerBase
     [HttpPost("{id}/attachments")]
     public async Task<IActionResult> UploadAttachment(int id, IFormFile file, [FromForm] VendorAttachmentType type)
     {
-        var owner = RequireEventOwner(out var error);
+        var (owner, error) = await RequireEventOwnerAsync();
         if (owner == null)
         {
             return error!;
         }
 
-        var vendor = _dbContext.Vendors.FirstOrDefault(v => v.VendorId == id && v.OwnerId == owner.Id);
+        var vendor = await _dbContext.Vendors.FirstOrDefaultAsync(v => v.VendorId == id && v.OwnerId == owner.Id);
         if (vendor == null)
         {
             return NotFound(new { message = "Vendor not found." });
@@ -408,19 +384,19 @@ public class VendorsController : ControllerBase
     [HttpDelete("{id}/attachments/{attachmentId}")]
     public async Task<IActionResult> DeleteAttachment(int id, int attachmentId)
     {
-        var owner = RequireEventOwner(out var error);
+        var (owner, error) = await RequireEventOwnerAsync();
         if (owner == null)
         {
             return error!;
         }
 
-        var vendor = _dbContext.Vendors.FirstOrDefault(v => v.VendorId == id && v.OwnerId == owner.Id);
+        var vendor = await _dbContext.Vendors.FirstOrDefaultAsync(v => v.VendorId == id && v.OwnerId == owner.Id);
         if (vendor == null)
         {
             return NotFound(new { message = "Vendor not found." });
         }
 
-        var attachment = _dbContext.VendorAttachments.FirstOrDefault(a => a.AttachmentId == attachmentId && a.VendorId == id);
+        var attachment = await _dbContext.VendorAttachments.FirstOrDefaultAsync(a => a.AttachmentId == attachmentId && a.VendorId == id);
         if (attachment == null)
         {
             return NotFound(new { message = "Attachment not found." });
