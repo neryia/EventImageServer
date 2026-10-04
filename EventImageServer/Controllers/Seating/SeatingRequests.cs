@@ -10,6 +10,8 @@ public class TableRequest
     public int Capacity { get; set; }
     public int CapacityOnSides { get; set; }
     public int CapacityOnTopAndBottom { get; set; }
+    // Null keeps the existing side on update (Both on create).
+    public EventSide? Side { get; set; }
     public double? PositionX { get; set; }
     public double? PositionY { get; set; }
     public double Rotation { get; set; }
@@ -45,6 +47,13 @@ public class GuestAssignment
 public class CategoryColorRequest
 {
     public string Color { get; set; } = string.Empty;
+}
+
+public class CategorySideRequest
+{
+    public EventSide Side { get; set; } = EventSide.Both;
+    public string? Label { get; set; }
+    public string? Color { get; set; }
 }
 
 public class SaveArrangementRequest

@@ -12,6 +12,8 @@
         public string? Name { get; set; }
         public string Category { get; set; } = string.Empty;
         public int Amount { get; set; }
+        // "bride" | "groom" | null (both)
+        public string? Side { get; set; }
         [JsonPropertyName("table_id")]
         public string? TableId { get; set; }
     }
@@ -21,6 +23,8 @@
         public string Id { get; set; } = string.Empty;
         public string? Name { get; set; }
         public int Seats { get; set; }
+        // "bride" | "groom" | null (any)
+        public string? Side { get; set; }
     }
 
     public class SeatingConstraintDto
@@ -70,6 +74,8 @@
         public int PeopleSeated { get; set; }
         [JsonPropertyName("constraint_violations")]
         public int ConstraintViolations { get; set; }
+        [JsonPropertyName("side_conflicts")]
+        public int SideConflicts { get; set; }
     }
 
     public class ArrangeResponseDto
@@ -79,6 +85,8 @@
         public ArrangeScoreDto Score { get; set; } = new();
     }
 
+    // Typed HttpClient for the Python seating service. BaseAddress and the
+    // X-API-Key header are configured in Program.cs.
     public class SeatingServiceClient
     {
         private readonly HttpClient _client;
@@ -88,15 +96,32 @@
             _client = client;
         }
 
-        // Sends guests/tables to the Python seating service and returns the
+        // Sends guests/tables to the seating service and returns the
         // arrangement (per-table assignments, unseated guests and a score).
         public async Task<ArrangeResponseDto> Arrange(SeatingArrangeRequest request)
         {
-            var response = await _client.PostAsJsonAsync("seating/arrange", request);
-            response.EnsureSuccessStatusCode();
+            using var response = await _client.PostAsJsonAsync("seating/arrange", request);
+            if (!response.IsSuccessStatusCode)
+            {
+                var body = await response.Content.ReadAsStringAsync();
+                throw new SeatingServiceException(response.StatusCode, body);
+            }
 
             var result = await response.Content.ReadFromJsonAsync<ArrangeResponseDto>();
             return result ?? new ArrangeResponseDto();
+        }
+    }
+
+    public class SeatingServiceException : Exception
+    {
+        public System.Net.HttpStatusCode StatusCode { get; }
+        public string ResponseBody { get; }
+
+        public SeatingServiceException(System.Net.HttpStatusCode statusCode, string responseBody)
+            : base($"Seating service returned {(int)statusCode}.")
+        {
+            StatusCode = statusCode;
+            ResponseBody = responseBody;
         }
     }
 

@@ -76,6 +76,10 @@ public sealed class TablesController : SeatingControllerBase
             table.Capacity = tableRequest.Capacity;
             table.CapacityOnSides = tableRequest.CapacityOnSides;
             table.CapacityOnTopAndBottom = tableRequest.CapacityOnTopAndBottom;
+            if (tableRequest.Side.HasValue)
+            {
+                table.Side = tableRequest.Side.Value;
+            }
             table.PositionX = tableRequest.PositionX;
             table.PositionY = tableRequest.PositionY;
             table.Rotation = tableRequest.Rotation;
@@ -140,7 +144,11 @@ public sealed class TablesController : SeatingControllerBase
             .Where(g => g.OwnerId == owner.Id)
             .ToListAsync();
 
-        return Ok(new { tables = updatedTables, guests = updatedGuests });
+        var categories = await DbContext.GuestCategories.AsNoTracking()
+            .Where(c => c.OwnerId == owner.Id)
+            .ToListAsync();
+
+        return Ok(new { tables = updatedTables, guests = updatedGuests, categories });
     }
 
     [HttpPost("SaveArrangement")]
@@ -201,8 +209,19 @@ public sealed class TablesController : SeatingControllerBase
             .Where(g => g.OwnerId == owner.Id)
             .ToListAsync();
 
-        return Ok(new { tables = updatedTables, guests = updatedGuests });
+        var categories = await DbContext.GuestCategories.AsNoTracking()
+            .Where(c => c.OwnerId == owner.Id)
+            .ToListAsync();
+
+        return Ok(new { tables = updatedTables, guests = updatedGuests, categories });
     }
+
+    private static string? ToSeatingSide(EventSide side) => side switch
+    {
+        EventSide.Bride => "bride",
+        EventSide.Groom => "groom",
+        _ => null
+    };
 
     [HttpPost("AutoAssign")]
     public async Task<IActionResult> AutoAssign([FromBody] AutoAssignRequest? request)
@@ -240,13 +259,21 @@ public sealed class TablesController : SeatingControllerBase
                 && seatableIds.Contains(c.GuestBId))
             .ToListAsync();
 
+        // A guest's side comes from their category (guests with no category are "both").
+        var sideByCategory = (await DbContext.GuestCategories.AsNoTracking()
+                .Where(c => c.OwnerId == owner.Id)
+                .ToListAsync())
+            .GroupBy(c => c.Value)
+            .ToDictionary(g => g.Key, g => g.First().Side);
+
         var serviceRequest = new SeatingArrangeRequest
         {
             Tables = tables.Select(t => new SeatingTableDto
             {
                 Id = t.TableId.ToString(),
                 Name = t.Name,
-                Seats = t.Capacity
+                Seats = t.Capacity,
+                Side = ToSeatingSide(t.Side)
             }).ToList(),
             Guests = seatableGuests.Select(g => new SeatingGuestDto
             {
@@ -254,6 +281,9 @@ public sealed class TablesController : SeatingControllerBase
                 Name = g.Name,
                 Category = string.IsNullOrWhiteSpace(g.Category) ? "General" : g.Category,
                 Amount = g.NumberOfGuests,
+                Side = ToSeatingSide(!string.IsNullOrWhiteSpace(g.Category) && sideByCategory.TryGetValue(g.Category, out var guestSide)
+                    ? guestSide
+                    : EventSide.Both),
                 TableId = lockedIds.Contains(g.GuestId) && g.TableId.HasValue
                     ? g.TableId.Value.ToString()
                     : null
@@ -266,7 +296,20 @@ public sealed class TablesController : SeatingControllerBase
             }).ToList()
         };
 
-        var result = await _seatingServiceClient.Arrange(serviceRequest);
+        ArrangeResponseDto result;
+        try
+        {
+            result = await _seatingServiceClient.Arrange(serviceRequest);
+        }
+        catch (SeatingServiceException ex) when ((int)ex.StatusCode == 422)
+        {
+            return UnprocessableEntity(new { message = "The seating service could not arrange these guests.", detail = ex.ResponseBody });
+        }
+        catch (Exception ex) when (ex is SeatingServiceException || ex is HttpRequestException || ex is TaskCanceledException)
+        {
+            return StatusCode(StatusCodes.Status502BadGateway,
+                new { message = "The seating service is unavailable or misconfigured. Check that it is running and that Seating:ApiKey matches SEATING_API_KEY." });
+        }
         var guestMap = seatableGuests.ToDictionary(g => g.GuestId);
         foreach (var guest in seatableGuests)
         {
@@ -301,7 +344,11 @@ public sealed class TablesController : SeatingControllerBase
             .Where(g => g.OwnerId == owner.Id)
             .ToListAsync();
 
-        return Ok(new { tables = updatedTables, guests = updatedGuests, unseated = result.Unseated, score = result.Score });
+        var categories = await DbContext.GuestCategories.AsNoTracking()
+            .Where(c => c.OwnerId == owner.Id)
+            .ToListAsync();
+
+        return Ok(new { tables = updatedTables, guests = updatedGuests, categories, unseated = result.Unseated, score = result.Score });
     }
 
     [HttpGet]
@@ -346,6 +393,7 @@ public sealed class TablesController : SeatingControllerBase
             Capacity = request.Capacity,
             CapacityOnSides = request.CapacityOnSides,
             CapacityOnTopAndBottom = request.CapacityOnTopAndBottom,
+            Side = request.Side ?? EventSide.Both,
             PositionX = request.PositionX,
             PositionY = request.PositionY,
             Rotation = request.Rotation,
@@ -373,6 +421,10 @@ public sealed class TablesController : SeatingControllerBase
         table.Capacity = request.Capacity;
         table.CapacityOnSides = request.CapacityOnSides;
         table.CapacityOnTopAndBottom = request.CapacityOnTopAndBottom;
+        if (request.Side.HasValue)
+        {
+            table.Side = request.Side.Value;
+        }
         table.PositionX = request.PositionX;
         table.PositionY = request.PositionY;
         table.Rotation = request.Rotation;

@@ -90,8 +90,15 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 
 builder.Services.AddHttpClient<SeatingServiceClient>(client =>
 {
-    client.BaseAddress = new Uri("http://localhost:8000/");
+    client.BaseAddress = new Uri(builder.Configuration["Seating:BaseUrl"] ?? "http://localhost:8000/");
     client.Timeout = TimeSpan.FromSeconds(20);
+
+    // Must match SEATING_API_KEY configured on the Python seating service.
+    var apiKey = builder.Configuration["Seating:ApiKey"];
+    if (!string.IsNullOrWhiteSpace(apiKey))
+    {
+        client.DefaultRequestHeaders.Add("X-API-Key", apiKey);
+    }
 });
 
 // Twilio (SMS/WhatsApp) messaging configuration + service

@@ -125,6 +125,79 @@ public sealed class GuestsController : SeatingControllerBase
         return Ok(category);
     }
 
+    // Sets the bride/groom side for every guest in a category. Creates the
+    // category row if it only exists client-side so far.
+    [HttpPut("Category/{categoryValue}/Side")]
+    public async Task<IActionResult> UpdateCategorySide(string categoryValue, [FromBody] CategorySideRequest request)
+    {
+        var owner = Owner;
+        if (string.IsNullOrWhiteSpace(categoryValue))
+        {
+            return BadRequest(new { message = "Category value is required." });
+        }
+        if (!Enum.IsDefined(typeof(EventSide), request.Side))
+        {
+            return BadRequest(new { message = "Invalid side." });
+        }
+
+        var category = await DbContext.GuestCategories
+            .FirstOrDefaultAsync(c => c.OwnerId == owner.Id && c.Value == categoryValue);
+        if (category == null)
+        {
+            category = new GuestCategory
+            {
+                OwnerId = owner.Id,
+                Value = categoryValue,
+                Side = request.Side
+            };
+            DbContext.GuestCategories.Add(category);
+        }
+        else
+        {
+            category.Side = request.Side;
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.Label))
+        {
+            category.Label = request.Label.Trim();
+        }
+        if (!string.IsNullOrWhiteSpace(request.Color))
+        {
+            category.Color = request.Color;
+        }
+
+        await DbContext.SaveChangesAsync();
+        return Ok(category);
+    }
+
+    [HttpDelete("Category/{categoryValue}")]
+    public async Task<IActionResult> DeleteCategory(string categoryValue)
+    {
+        var owner = Owner;
+        if (string.IsNullOrWhiteSpace(categoryValue))
+        {
+            return BadRequest(new { message = "Category value is required." });
+        }
+
+        var guests = await DbContext.Guests
+            .Where(g => g.OwnerId == owner.Id && g.Category == categoryValue)
+            .ToListAsync();
+        foreach (var guest in guests)
+        {
+            guest.Category = null;
+        }
+
+        var category = await DbContext.GuestCategories
+            .FirstOrDefaultAsync(c => c.OwnerId == owner.Id && c.Value == categoryValue);
+        if (category != null)
+        {
+            DbContext.GuestCategories.Remove(category);
+        }
+
+        await DbContext.SaveChangesAsync();
+        return Ok(new { message = "Category deleted." });
+    }
+
     [HttpPut("Guests/{id}/Table/{tableId}")]
     public async Task<IActionResult> AssignGuestToTable(int id, int tableId)
     {
