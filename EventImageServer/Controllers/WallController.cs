@@ -37,7 +37,7 @@ namespace EventImageServer.Controllers
             }
 
             var now = DateTime.UtcNow;
-            var start = owner.EventDate.Value.AddHours(-2); // opens 2 hours early
+            var start = owner.EventDate.Value.AddHours(-1); // opens 1 hour early
             var end = owner.EventDate.Value.AddDays(2); // one extra grace day vs. the upload window
             return now >= start && now <= end;
         }
@@ -91,7 +91,7 @@ namespace EventImageServer.Controllers
                     });
                 }
 
-                var opensAt = owner.EventDate.Value.AddHours(-2);
+                var opensAt = owner.EventDate.Value.AddHours(-1);
                 var now = DateTime.UtcNow;
                 if (now > opensAt)
                 {

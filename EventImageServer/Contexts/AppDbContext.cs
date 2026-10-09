@@ -14,6 +14,7 @@ namespace EventImageServer.Contexts
         public DbSet<Vendor> Vendors { get; set; }
         public DbSet<VendorTimelineStep> VendorTimelineSteps { get; set; }
         public DbSet<VendorAttachment> VendorAttachments { get; set; }
+        public DbSet<VendorPayment> VendorPayments { get; set; }
         public DbSet<Budget> Budgets { get; set; }
         public DbSet<BudgetCategory> BudgetCategories { get; set; }
         public DbSet<BudgetExpense> BudgetExpenses { get; set; }
@@ -82,6 +83,12 @@ namespace EventImageServer.Contexts
                 .HasMany(v => v.Attachments)
                 .WithOne(a => a.Vendor)
                 .HasForeignKey(a => a.VendorId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<Vendor>()
+                .HasMany(v => v.Payments)
+                .WithOne(p => p.Vendor)
+                .HasForeignKey(p => p.VendorId)
                 .OnDelete(DeleteBehavior.Cascade);
 
             modelBuilder.Entity<Budget>()

@@ -67,6 +67,49 @@ public class VendorsController : ControllerBase
         public VendorStatus Status { get; set; }
     }
 
+    public class PaymentRequest
+    {
+        public string? Label { get; set; }
+        public decimal Amount { get; set; }
+        public DateTime? DueDate { get; set; }
+    }
+
+    public class PaymentPaidRequest
+    {
+        public bool IsPaid { get; set; }
+    }
+
+    private const decimal MaxPaymentAmount = 1_000_000_000m;
+    private const int MaxPaymentLabelLength = 100;
+
+    private IActionResult? ValidatePayment(PaymentRequest request)
+    {
+        if (request.Amount <= 0 || request.Amount > MaxPaymentAmount)
+        {
+            return BadRequest(new { message = "Payment amount must be greater than zero." });
+        }
+
+        if (request.DueDate == null)
+        {
+            return BadRequest(new { message = "Payment due date is required." });
+        }
+
+        if ((request.Label ?? string.Empty).Trim().Length > MaxPaymentLabelLength)
+        {
+            return BadRequest(new { message = $"Payment label must be at most {MaxPaymentLabelLength} characters." });
+        }
+
+        return null;
+    }
+
+    private Task<Vendor?> LoadFullVendorAsync(int id, string ownerId) =>
+        _dbContext.Vendors
+            .Where(v => v.VendorId == id && v.OwnerId == ownerId)
+            .Include(v => v.Timeline)
+            .Include(v => v.Attachments)
+            .Include(v => v.Payments)
+            .FirstOrDefaultAsync();
+
     public class TimelineStepRequest
     {
         public TimelineStepType Step { get; set; }
@@ -88,6 +131,7 @@ public class VendorsController : ControllerBase
                 .Where(v => v.OwnerId == owner.Id)
                 .Include(v => v.Timeline)
                 .Include(v => v.Attachments)
+                .Include(v => v.Payments)
                 .AsQueryable();
 
             if (category.HasValue)
@@ -105,8 +149,9 @@ public class VendorsController : ControllerBase
             return Ok(vendors);
     }
 
-    // Dashboard summary: counts by status, overall progress, and vendors
-    // needing a payment in the next 7 days.
+    // Dashboard summary: counts by status, overall progress, and unpaid
+    // installments that are overdue or due in the next 7 days (date-only,
+    // server local "today"; cancelled vendors are skipped).
     [HttpGet("summary")]
     public async Task<IActionResult> GetSummary()
     {
@@ -119,6 +164,7 @@ public class VendorsController : ControllerBase
             var vendors = await _dbContext.Vendors.AsNoTracking()
                 .Where(v => v.OwnerId == owner.Id)
                 .Include(v => v.Timeline)
+                .Include(v => v.Payments)
                 .ToListAsync();
 
             var byStatus = vendors
@@ -134,18 +180,34 @@ public class VendorsController : ControllerBase
                     return (double)(v.Timeline!.Count(s => s.IsDone)) / steps * 100;
                 }));
 
-            var weekFromNow = DateTime.UtcNow.AddDays(7);
-            var needsPaymentThisWeek = vendors
-                .Where(v => v.NextPaymentDate.HasValue && v.NextPaymentDate.Value <= weekFromNow && v.NextPaymentDate.Value >= DateTime.UtcNow)
-                .Select(v => new { v.VendorId, v.Name, v.NextPaymentDate })
+            var today = DateTime.Today;
+            var weekEnd = today.AddDays(7);
+            var unpaid = vendors
+                .Where(v => v.Status != VendorStatus.Cancelled)
+                .SelectMany(v => (v.Payments ?? new List<VendorPayment>())
+                    .Where(p => !p.IsPaid)
+                    .Select(p => new
+                    {
+                        v.VendorId,
+                        v.Name,
+                        p.PaymentId,
+                        p.Label,
+                        p.Amount,
+                        DueDate = p.DueDate.Date
+                    }))
+                .OrderBy(p => p.DueDate)
                 .ToList();
+
+            var overduePayments = unpaid.Where(p => p.DueDate < today).ToList();
+            var paymentsDueThisWeek = unpaid.Where(p => p.DueDate >= today && p.DueDate < weekEnd).ToList();
 
             return Ok(new
             {
                 total = vendors.Count,
                 byStatus,
                 overallProgress,
-                needsPaymentThisWeek
+                overduePayments,
+                paymentsDueThisWeek
             });
     }
 
@@ -162,6 +224,7 @@ public class VendorsController : ControllerBase
                 .Where(v => v.VendorId == id && v.OwnerId == owner.Id)
                 .Include(v => v.Timeline)
                 .Include(v => v.Attachments)
+                .Include(v => v.Payments)
                 .FirstOrDefaultAsync();
 
             if (vendor == null)
@@ -186,7 +249,7 @@ public class VendorsController : ControllerBase
             Name = request.Name ?? string.Empty,
             ContactName = request.ContactName ?? string.Empty,
             Category = request.Category,
-            Status = request.Status,
+            Status = VendorStatus.NotStarted,
             Phone = request.Phone ?? string.Empty,
             WhatsApp = request.WhatsApp ?? string.Empty,
             Email = request.Email ?? string.Empty,
@@ -194,8 +257,6 @@ public class VendorsController : ControllerBase
             Instagram = request.Instagram ?? string.Empty,
             AgreedPrice = request.AgreedPrice,
             DepositAmount = request.DepositAmount,
-            PaidAmount = request.PaidAmount,
-            NextPaymentDate = request.NextPaymentDate,
             Notes = request.Notes ?? string.Empty,
             QuestionsToAsk = request.QuestionsToAsk ?? string.Empty,
             Promises = request.Promises ?? string.Empty,
@@ -223,7 +284,7 @@ public class VendorsController : ControllerBase
             return error!;
         }
 
-        var vendor = await _dbContext.Vendors.FirstOrDefaultAsync(v => v.VendorId == id && v.OwnerId == owner.Id);
+        var vendor = await LoadFullVendorAsync(id, owner.Id!);
         if (vendor == null)
         {
             return NotFound(new { message = "Vendor not found." });
@@ -232,7 +293,6 @@ public class VendorsController : ControllerBase
         vendor.Name = request.Name ?? string.Empty;
         vendor.ContactName = request.ContactName ?? string.Empty;
         vendor.Category = request.Category;
-        vendor.Status = request.Status;
         vendor.Phone = request.Phone ?? string.Empty;
         vendor.WhatsApp = request.WhatsApp ?? string.Empty;
         vendor.Email = request.Email ?? string.Empty;
@@ -240,8 +300,6 @@ public class VendorsController : ControllerBase
         vendor.Instagram = request.Instagram ?? string.Empty;
         vendor.AgreedPrice = request.AgreedPrice;
         vendor.DepositAmount = request.DepositAmount;
-        vendor.PaidAmount = request.PaidAmount;
-        vendor.NextPaymentDate = request.NextPaymentDate;
         vendor.Notes = request.Notes ?? string.Empty;
         vendor.QuestionsToAsk = request.QuestionsToAsk ?? string.Empty;
         vendor.Promises = request.Promises ?? string.Empty;
@@ -288,13 +346,130 @@ public class VendorsController : ControllerBase
             return error!;
         }
 
-        var vendor = await _dbContext.Vendors.FirstOrDefaultAsync(v => v.VendorId == id && v.OwnerId == owner.Id);
+        var vendor = await LoadFullVendorAsync(id, owner.Id!);
         if (vendor == null)
         {
             return NotFound(new { message = "Vendor not found." });
         }
 
-        vendor.Status = request.Status;
+        // Status is derived from the timeline; the only manual action is
+        // Cancel (Cancelled) / Reactivate (anything else -> derived).
+        vendor.Status = request.Status == VendorStatus.Cancelled
+            ? VendorStatus.Cancelled
+            : VendorRules.DeriveStatus(vendor.Timeline);
+        await _dbContext.SaveChangesAsync();
+
+        return Ok(vendor);
+    }
+
+    [HttpPost("{id}/payments")]
+    public async Task<IActionResult> AddPayment(int id, [FromBody] PaymentRequest request)
+    {
+        var (owner, error) = await RequireEventOwnerAsync();
+        if (owner == null)
+        {
+            return error!;
+        }
+
+        var invalid = ValidatePayment(request);
+        if (invalid != null)
+        {
+            return invalid;
+        }
+
+        var vendor = await LoadFullVendorAsync(id, owner.Id!);
+        if (vendor == null)
+        {
+            return NotFound(new { message = "Vendor not found." });
+        }
+
+        vendor.Payments ??= new List<VendorPayment>();
+        vendor.Payments.Add(new VendorPayment
+        {
+            Label = (request.Label ?? string.Empty).Trim(),
+            Amount = request.Amount,
+            DueDate = request.DueDate!.Value.Date
+        });
+        VendorRules.RecalculatePayments(vendor);
+        await _dbContext.SaveChangesAsync();
+
+        return Ok(vendor);
+    }
+
+    [HttpPut("{id}/payments/{paymentId}")]
+    public async Task<IActionResult> UpdatePayment(int id, int paymentId, [FromBody] PaymentRequest request)
+    {
+        var (owner, error) = await RequireEventOwnerAsync();
+        if (owner == null)
+        {
+            return error!;
+        }
+
+        var invalid = ValidatePayment(request);
+        if (invalid != null)
+        {
+            return invalid;
+        }
+
+        var vendor = await LoadFullVendorAsync(id, owner.Id!);
+        var payment = vendor?.Payments?.FirstOrDefault(p => p.PaymentId == paymentId);
+        if (vendor == null || payment == null)
+        {
+            return NotFound(new { message = "Payment not found." });
+        }
+
+        payment.Label = (request.Label ?? string.Empty).Trim();
+        payment.Amount = request.Amount;
+        payment.DueDate = request.DueDate!.Value.Date;
+        VendorRules.RecalculatePayments(vendor);
+        await _dbContext.SaveChangesAsync();
+
+        return Ok(vendor);
+    }
+
+    [HttpPatch("{id}/payments/{paymentId}/paid")]
+    public async Task<IActionResult> SetPaymentPaid(int id, int paymentId, [FromBody] PaymentPaidRequest request)
+    {
+        var (owner, error) = await RequireEventOwnerAsync();
+        if (owner == null)
+        {
+            return error!;
+        }
+
+        var vendor = await LoadFullVendorAsync(id, owner.Id!);
+        var payment = vendor?.Payments?.FirstOrDefault(p => p.PaymentId == paymentId);
+        if (vendor == null || payment == null)
+        {
+            return NotFound(new { message = "Payment not found." });
+        }
+
+        payment.IsPaid = request.IsPaid;
+        payment.PaidAt = request.IsPaid ? DateTime.UtcNow : null;
+        VendorRules.RecalculatePayments(vendor);
+        await _dbContext.SaveChangesAsync();
+
+        return Ok(vendor);
+    }
+
+    [HttpDelete("{id}/payments/{paymentId}")]
+    public async Task<IActionResult> DeletePayment(int id, int paymentId)
+    {
+        var (owner, error) = await RequireEventOwnerAsync();
+        if (owner == null)
+        {
+            return error!;
+        }
+
+        var vendor = await LoadFullVendorAsync(id, owner.Id!);
+        var payment = vendor?.Payments?.FirstOrDefault(p => p.PaymentId == paymentId);
+        if (vendor == null || payment == null)
+        {
+            return NotFound(new { message = "Payment not found." });
+        }
+
+        vendor.Payments!.Remove(payment);
+        _dbContext.VendorPayments.Remove(payment);
+        VendorRules.RecalculatePayments(vendor);
         await _dbContext.SaveChangesAsync();
 
         return Ok(vendor);
@@ -309,24 +484,20 @@ public class VendorsController : ControllerBase
             return error!;
         }
 
-        var vendor = await _dbContext.Vendors
-            .Where(v => v.VendorId == id && v.OwnerId == owner.Id)
-            .Include(v => v.Timeline)
-            .FirstOrDefaultAsync();
+        var vendor = await LoadFullVendorAsync(id, owner.Id!);
 
         if (vendor == null)
         {
             return NotFound(new { message = "Vendor not found." });
         }
 
-        var step = vendor.Timeline?.FirstOrDefault(s => s.Step == request.Step);
-        if (step == null)
+        if (vendor.Timeline?.Any(s => s.Step == request.Step) != true)
         {
             return NotFound(new { message = "Timeline step not found." });
         }
 
-        step.IsDone = request.IsDone;
-        step.CompletedAt = request.IsDone ? DateTime.UtcNow : null;
+        // Contiguous-prefix semantics + status derivation live server-side.
+        VendorRules.ApplyTimelineChange(vendor, request.Step, request.IsDone);
 
         await _dbContext.SaveChangesAsync();
 
@@ -351,6 +522,24 @@ public class VendorsController : ControllerBase
         if (file == null || file.Length == 0)
         {
             return BadRequest(new { message = "No file uploaded." });
+        }
+
+        if (file.Length > VendorAttachmentRules.MaxBytes)
+        {
+            return BadRequest(new { message = "File is too large (max 15 MB)." });
+        }
+
+        if (!VendorAttachmentRules.IsAllowedExtension(file.FileName))
+        {
+            return BadRequest(new { message = "Unsupported file type. Allowed: PDF, JPG, PNG, WEBP, DOC, DOCX." });
+        }
+
+        using (var probe = file.OpenReadStream())
+        {
+            if (!VendorAttachmentRules.LooksValid(file.FileName, probe))
+            {
+                return BadRequest(new { message = "File content does not match its type." });
+            }
         }
 
         var folderPath = Path.Combine(Directory.GetCurrentDirectory(), "UploadedImages", owner.Id!, "vendors", id.ToString());

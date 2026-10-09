@@ -46,6 +46,7 @@ builder.Services
     {
         options.Authority = "https://securetoken.google.com/eventimage-72337";
         options.RequireHttpsMetadata = false;
+        options.MapInboundClaims = false;
         options.TokenValidationParameters = new TokenValidationParameters
         {
             ValidateIssuer = true,

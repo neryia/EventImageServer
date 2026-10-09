@@ -579,6 +579,12 @@ namespace EventImageServer.Migrations
                     b.Property<DateTime?>("EventDate")
                         .HasColumnType("TEXT");
 
+                    b.Property<int>("FloorPlanHeight")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("FloorPlanWidth")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("FullName")
                         .HasColumnType("TEXT");
 
@@ -707,6 +713,38 @@ namespace EventImageServer.Migrations
                     b.HasIndex("VendorId");
 
                     b.ToTable("VendorAttachments");
+                });
+
+            modelBuilder.Entity("EventImageServer.Models.VendorPayment", b =>
+                {
+                    b.Property<int>("PaymentId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<decimal>("Amount")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("DueDate")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsPaid")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Label")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("PaidAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("VendorId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("PaymentId");
+
+                    b.HasIndex("VendorId");
+
+                    b.ToTable("VendorPayments");
                 });
 
             modelBuilder.Entity("EventImageServer.Models.VendorTimelineStep", b =>
@@ -955,6 +993,17 @@ namespace EventImageServer.Migrations
                     b.Navigation("Vendor");
                 });
 
+            modelBuilder.Entity("EventImageServer.Models.VendorPayment", b =>
+                {
+                    b.HasOne("EventImageServer.Models.Vendor", "Vendor")
+                        .WithMany("Payments")
+                        .HasForeignKey("VendorId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Vendor");
+                });
+
             modelBuilder.Entity("EventImageServer.Models.VendorTimelineStep", b =>
                 {
                     b.HasOne("EventImageServer.Models.Vendor", "Vendor")
@@ -1005,6 +1054,8 @@ namespace EventImageServer.Migrations
             modelBuilder.Entity("EventImageServer.Models.Vendor", b =>
                 {
                     b.Navigation("Attachments");
+
+                    b.Navigation("Payments");
 
                     b.Navigation("Timeline");
                 });

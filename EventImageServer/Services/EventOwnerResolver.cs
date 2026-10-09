@@ -90,14 +90,13 @@ namespace EventImageServer.Services
                 await _dbContext.SaveChangesAsync();
             }
 
-            if (user.Role == RoleType.EventOwner)
-            {
-                return EventOwnerResolution.Success(user);
-            }
-
+            // An accepted invite wins even over an auto-provisioned EventOwner
+            // row: invitees usually log in (and get provisioned) before accepting.
             var collaboration = await _dbContext.EventCollaborators
                 .AsNoTracking()
-                .FirstOrDefaultAsync(c => c.CollaboratorUserId == userId && c.AcceptedAt != null);
+                .Where(c => c.CollaboratorUserId == userId && c.AcceptedAt != null)
+                .OrderBy(c => c.Role)
+                .FirstOrDefaultAsync();
             if (collaboration != null)
             {
                 var effectiveOwner = await _dbContext.Clients.FirstOrDefaultAsync(u => u.Id == collaboration.OwnerId);
@@ -107,10 +106,15 @@ namespace EventImageServer.Services
                 }
             }
 
+            if (user.Role == RoleType.EventOwner)
+            {
+                return EventOwnerResolution.Success(user);
+            }
+
             return EventOwnerResolution.Failure(403, roleErrorMessage);
         }
 
-        private static bool IsAnonymous(ClaimsPrincipal principal)
+        public static bool IsAnonymous(ClaimsPrincipal principal)
         {
             var signInProvider = principal.FindFirst("firebase.sign_in_provider")?.Value
                 ?? principal.FindFirst("sign_in_provider")?.Value;

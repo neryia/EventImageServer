@@ -9,7 +9,15 @@ namespace EventImageServer.Models
         Bar,
         Entrance,
         Dj,
-        Custom
+        Custom,
+        PhotoBooth,
+        Buffet,
+        GiftTable,
+        CakeTable,
+        Exit,
+        Restroom,
+        Pillar,
+        Wall
     }
 
     public class VenueElement

@@ -41,5 +41,6 @@ namespace EventImageServer.Models
 
         public ICollection<VendorTimelineStep>? Timeline { get; set; }
         public ICollection<VendorAttachment>? Attachments { get; set; }
+        public ICollection<VendorPayment>? Payments { get; set; }
     }
 }

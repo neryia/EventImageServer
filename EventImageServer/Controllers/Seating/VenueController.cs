@@ -31,6 +31,12 @@ public sealed class VenueController : SeatingControllerBase
     public async Task<IActionResult> CreateVenueElement([FromBody] VenueElementRequest request)
     {
         var owner = Owner;
+        var validationError = FloorPlanValidation.ValidateElement(request);
+        if (validationError != null)
+        {
+            return BadRequest(new { message = validationError });
+        }
+
         var element = new VenueElement
         {
             OwnerId = owner.Id!,
@@ -40,7 +46,7 @@ public sealed class VenueController : SeatingControllerBase
             Y = request.Y,
             Width = request.Width,
             Height = request.Height,
-            Rotation = request.Rotation,
+            Rotation = FloorPlanValidation.NormalizeRotation(request.Rotation),
         };
         DbContext.VenueElements.Add(element);
         await DbContext.SaveChangesAsync();
@@ -51,6 +57,12 @@ public sealed class VenueController : SeatingControllerBase
     public async Task<IActionResult> UpdateVenueElement(int id, [FromBody] VenueElementRequest request)
     {
         var owner = Owner;
+        var validationError = FloorPlanValidation.ValidateElement(request);
+        if (validationError != null)
+        {
+            return BadRequest(new { message = validationError });
+        }
+
         var element = await DbContext.VenueElements.FirstOrDefaultAsync(e => e.ElementId == id && e.OwnerId == owner.Id);
         if (element == null)
         {
@@ -63,7 +75,7 @@ public sealed class VenueController : SeatingControllerBase
         element.Y = request.Y;
         element.Width = request.Width;
         element.Height = request.Height;
-        element.Rotation = request.Rotation;
+        element.Rotation = FloorPlanValidation.NormalizeRotation(request.Rotation);
         await DbContext.SaveChangesAsync();
         return Ok(element);
     }

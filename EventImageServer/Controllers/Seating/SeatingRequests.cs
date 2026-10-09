@@ -103,6 +103,28 @@ public class VenueElementRequest
     public double Rotation { get; set; }
 }
 
+public class FloorPlanTablePosition
+{
+    public int TableId { get; set; }
+    public double PositionX { get; set; }
+    public double PositionY { get; set; }
+    public double Rotation { get; set; }
+}
+
+public class FloorPlanElementRequest : VenueElementRequest
+{
+    public int? ElementId { get; set; }
+    public string ClientKey { get; set; } = string.Empty;
+}
+
+public class FloorPlanRequest
+{
+    public int? Width { get; set; }
+    public int? Height { get; set; }
+    public List<FloorPlanTablePosition> Tables { get; set; } = new();
+    public List<FloorPlanElementRequest> Elements { get; set; } = new();
+}
+
 public class SeatingConstraintRequest
 {
     public int GuestAId { get; set; }

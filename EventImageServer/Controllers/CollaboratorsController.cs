@@ -35,7 +35,12 @@ public class CollaboratorsController : ControllerBase
             return StatusCode(resolution.ErrorStatusCode ?? 401, new { message = resolution.ErrorMessage });
         }
 
-        return Ok(new { isReadOnlyViewer = resolution.IsReadOnlyViewer });
+        return Ok(new
+        {
+            isReadOnlyViewer = resolution.IsReadOnlyViewer,
+            isCollaborator = resolution.Owner.Id != GetUID(),
+            eventOwnerId = resolution.Owner.Id
+        });
     }
 
     private string GetUID()
@@ -156,7 +161,7 @@ public class CollaboratorsController : ControllerBase
             collaborator.CollaboratorEmail,
             $"{inviterName} invited you to help plan their event",
             $"{inviterName} has invited you to collaborate on their event on EventImage.\n\n" +
-            $"Click the link below to accept the invite (you'll need to sign in or create an account with this email address, {collaborator.CollaboratorEmail}):\n\n" +
+            $"Click the link below to accept the invite (no account or sign-up needed):\n\n" +
             $"{joinLink}\n\n" +
             $"This invite expires on {collaborator.ExpiresAt:yyyy-MM-dd}.");
 
@@ -237,15 +242,30 @@ public class CollaboratorsController : ControllerBase
             return BadRequest(new { message = "This invite has expired." });
         }
 
-        var emailVerified = string.Equals(
-            User.FindFirst("email_verified")?.Value,
-            "true",
-            StringComparison.OrdinalIgnoreCase);
-        var callerEmail = (User.FindFirst("email")?.Value ?? string.Empty).Trim();
-        if (!emailVerified || string.IsNullOrEmpty(callerEmail)
-            || !string.Equals(callerEmail, collaboration.CollaboratorEmail.Trim(), StringComparison.OrdinalIgnoreCase))
+        // Anonymous callers (no registration) are authorized by the secret,
+        // single-use, expiring invite token alone. Callers with a real
+        // account must still match the invited, verified email.
+        if (!EventOwnerResolver.IsAnonymous(User))
         {
-            return StatusCode(403, new { message = "This invite was sent to a different email address." });
+            var emailVerified = string.Equals(
+                User.FindFirst("email_verified")?.Value,
+                "true",
+                StringComparison.OrdinalIgnoreCase);
+            var callerEmail = (User.FindFirst("email")?.Value ?? string.Empty).Trim();
+            if (string.IsNullOrEmpty(callerEmail))
+            {
+                return StatusCode(403, new { message = "You are not signed in with an email account." });
+            }
+
+            if (!string.Equals(callerEmail, collaboration.CollaboratorEmail.Trim(), StringComparison.OrdinalIgnoreCase))
+            {
+                return StatusCode(403, new { message = $"This invite was sent to {collaboration.CollaboratorEmail}, but you are signed in as {callerEmail}." });
+            }
+
+            if (!emailVerified)
+            {
+                return StatusCode(403, new { message = "Your email address is not verified yet. Verify it, sign in again, and reopen the invite link." });
+            }
         }
 
         // Auto-provision the accepting user's own Users row (as a plain

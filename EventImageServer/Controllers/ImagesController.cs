@@ -146,7 +146,7 @@ public class ImagesController : ControllerBase
             FileName = fileName,
             MediaType = GetMediaType(fileName),
             CreatedAt = DateTime.UtcNow,
-            ShowOnWall = false,
+            ShowOnWall = true,
         });
         await _dbContext.SaveChangesAsync();
 

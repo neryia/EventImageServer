@@ -20,6 +20,8 @@
         public DateTime? RsvpDeadline { get; set; } // Event-level RSVP deadline for this EventOwner
         public DateTime? EventDate { get; set; } // The wedding day itself; gates guest media uploads on the RSVP page
         public string? WallToken { get; set; } // Secret token gating the public live photo wall (null = disabled)
+        public int FloorPlanWidth { get; set; } = 900; // Floor plan canvas size (pixel units)
+        public int FloorPlanHeight { get; set; } = 600;
 
         // Automatic RSVP reminders (Phase 5.A): when enabled, ReminderScheduler
         // sends a reminder to still-pending guests N days before RsvpDeadline,

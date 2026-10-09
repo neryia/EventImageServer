@@ -32,6 +32,15 @@ public sealed class TablesController : SeatingControllerBase
             return BadRequest(new { message = "Table keys must be unique and capacities cannot be negative." });
         }
 
+        foreach (var t in request.Tables.Where(t => t.PositionX.HasValue && t.PositionY.HasValue))
+        {
+            var positionError = FloorPlanValidation.ValidatePosition(t.PositionX!.Value, t.PositionY!.Value, t.Rotation);
+            if (positionError != null)
+            {
+                return BadRequest(new { message = positionError });
+            }
+        }
+
         if (request.Assignments.Select(a => a.GuestId).Distinct().Count() != request.Assignments.Count)
         {
             return BadRequest(new { message = "Each guest can only have one seating assignment." });
@@ -148,7 +157,8 @@ public sealed class TablesController : SeatingControllerBase
             .Where(c => c.OwnerId == owner.Id)
             .ToListAsync();
 
-        return Ok(new { tables = updatedTables, guests = updatedGuests, categories });
+        var tableKeyMap = tableByClientKey.ToDictionary(kv => kv.Key, kv => kv.Value.TableId);
+        return Ok(new { tables = updatedTables, guests = updatedGuests, categories, tableKeyMap });
     }
 
     [HttpPost("SaveArrangement")]
@@ -378,7 +388,7 @@ public sealed class TablesController : SeatingControllerBase
             confirmedPeople = guests.Where(g => g.RsvpStatus == RsvpStatus.Confirmed).Sum(g => g.ConfirmedCount ?? g.NumberOfGuests)
         };
 
-        return Ok(new { tables, guests, categories, venueElements, rsvpSummary, rsvpDeadline = owner.RsvpDeadline, eventDate = owner.EventDate, wallToken = owner.WallToken });
+        return Ok(new { tables, guests, categories, venueElements, rsvpSummary, rsvpDeadline = owner.RsvpDeadline, eventDate = owner.EventDate, wallToken = owner.WallToken, floorPlan = new { width = owner.FloorPlanWidth, height = owner.FloorPlanHeight } });
     }
 
     [HttpPost("Tables")]
@@ -436,6 +446,12 @@ public sealed class TablesController : SeatingControllerBase
     public async Task<IActionResult> UpdateTablePosition(int id, [FromBody] TablePositionRequest request)
     {
         var owner = Owner;
+        var positionError = FloorPlanValidation.ValidatePosition(request.PositionX, request.PositionY, request.Rotation);
+        if (positionError != null)
+        {
+            return BadRequest(new { message = positionError });
+        }
+
         var table = await DbContext.Tables.FirstOrDefaultAsync(t => t.TableId == id && t.OwnerId == owner.Id);
         if (table == null)
         {
@@ -444,7 +460,7 @@ public sealed class TablesController : SeatingControllerBase
 
         table.PositionX = request.PositionX;
         table.PositionY = request.PositionY;
-        table.Rotation = request.Rotation;
+        table.Rotation = FloorPlanValidation.NormalizeRotation(request.Rotation);
         await DbContext.SaveChangesAsync();
         return Ok(table);
     }
